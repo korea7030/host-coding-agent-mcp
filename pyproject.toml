@@ -1,0 +1,31 @@
+[project]
+name = "host-coding-agent-mcp"
+version = "0.1.0"
+description = "Host-side MCP server for safely invoking coding-agent CLIs from Dockerized Hermes agents"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastmcp>=3.0,<4",
+  "pydantic>=2.10,<3",
+  "pyyaml>=6.0,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0,<9",
+  "pytest-asyncio>=0.24,<2",
+]
+
+[project.scripts]
+host-coding-agent-mcp = "server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["host_coding_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

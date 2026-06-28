@@ -1,0 +1,109 @@
+server:
+  # 기본값은 안전한 loopback 전용이다. Docker Desktop host networking을 권장한다.
+  # bridge + host.docker.internal 사용 시 0.0.0.0으로 바꾸기 전에 README의 보안 조건을 적용한다.
+  host: "127.0.0.1"
+  port: 8787
+  path: "/mcp"
+  mask_error_details: true
+
+auth:
+  enabled: true
+  required_scope: "host-coding-agent"
+
+security:
+  default_mode: "propose_patch"
+  allow_apply_patch: false
+  max_timeout_sec: 1800
+  max_output_chars: 200000
+  allowed_roots:
+    - "/Users/jaehyunlee/projects"
+    - "/Users/jaehyunlee/tmp"
+    - "/Users/jaehyunlee/hermes-workspaces"
+    - "/Users/jaehyunlee/coding"
+  denied_paths:
+    - "/Users/jaehyunlee/.ssh"
+    - "/Users/jaehyunlee/.aws"
+    - "/Users/jaehyunlee/.config"
+    - "/Users/jaehyunlee/Library/Keychains"
+    - "/Users/jaehyunlee/Library/Application Support"
+    - "/Users/jaehyunlee/.docker"
+    - "/Users/jaehyunlee/.kube"
+
+agents:
+  antigravity:
+    # CLI 자체의 강제 read-only가 없어 기본 비활성화한다.
+    enabled: false
+    command: "/Users/jaehyunlee/.local/bin/agy"
+    default_args: []
+    priority: 1
+  codex:
+    enabled: true
+    command: "/Users/jaehyunlee/.nvm/versions/node/v24.14.0/bin/codex"
+    default_args:
+      - "exec"
+    priority: 2
+  opencode:
+    # OMO 위임은 허용하지만 inline permission으로 edit/bash/external access를 deny한다.
+    # macOS sandbox-exec가 workspace 원본 쓰기를 추가로 차단한다.
+    enabled: true
+    command: "/Users/jaehyunlee/.nvm/versions/node/v24.14.0/bin/opencode"
+    default_args:
+      - "run"
+    priority: 3
+
+routing:
+  default_order:
+    - "antigravity"
+    - "codex"
+    - "opencode"
+  codex_keywords:
+    - "버그"
+    - "단일 파일"
+    - "diff"
+    - "테스트 실패"
+    - "작은 기능"
+    - "bug"
+    - "single file"
+    - "test failure"
+  opencode_keywords:
+    - "대규모"
+    - "리팩토링"
+    - "아키텍처"
+    - "마이그레이션"
+    - "멀티파일"
+    - "테스트까지"
+    - "전체 수정"
+    - "구조 변경"
+    - "고도 개발"
+    - "refactor"
+    - "architecture"
+    - "migration"
+    - "multi-file"
+    - "test suite"
+    - "large change"
+
+profiles:
+  dev-bot:
+    # 실제 token은 YAML이 아니라 이 환경변수에서 읽는다.
+    token_env: "HOST_CODING_AGENT_DEV_BOT_TOKEN"
+    allowed_roots:
+      - "/Users/jaehyunlee/projects"
+      - "/Users/jaehyunlee/tmp"
+      - "/Users/jaehyunlee/hermes-workspaces"
+      - "/Users/jaehyunlee/coding"
+    allowed_agents:
+      - "codex"
+      - "opencode"
+    allowed_modes:
+      - "read_only"
+      - "propose_patch"
+    default_cwd: "/Users/jaehyunlee/projects"
+    default_agent: "auto"
+    default_mode: "propose_patch"
+    context:
+      language: "한국어"
+      environment: "macOS host에서 실행되며 Docker의 Hermes dev-bot이 MCP로 호출"
+
+logging:
+  path: "logs/calls.jsonl"
+  task_preview_chars: 0
