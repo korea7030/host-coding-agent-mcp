@@ -158,11 +158,15 @@ def _build_command(
         prompt = None
     else:
         command = [
-            executable, "--print", "--print-timeout", "30m", "--sandbox"
+            executable, "--print", prompt, "--print-timeout", "30m", "--sandbox"
         ]
         if mode != RunMode.apply_patch:
-            command = _sandbox_prefix(cwd) + command
-        command.append(prompt)
+            command = _sandbox_prefix(cwd, [
+                Path("/private/tmp"),
+                Path("/private/var/folders"),
+                Path.home() / ".gemini/antigravity-cli",
+                Path.home() / ".gemini/config",
+            ]) + command
         prompt = None
     return command, prompt
 

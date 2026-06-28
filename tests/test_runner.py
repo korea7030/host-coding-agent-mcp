@@ -4,6 +4,7 @@ from host_coding_agent.models import AgentName, AttemptResult, ExecutionContext,
 from host_coding_agent.runner import (
     OPENCODE_READONLY_CONFIG,
     _agent_text,
+    _build_command,
     _extract_diff,
     _prompt,
     run_coding_agent,
@@ -104,3 +105,19 @@ def test_auto_routing_is_limited_to_profile_allowed_agents(config, monkeypatch):
 
     assert result.ok
     assert attempted == [AgentName.codex]
+
+
+def test_antigravity_print_prompt_immediately_follows_flag(config):
+    cwd = config.security.allowed_roots[0]
+    command, stdin_prompt = _build_command(
+        AgentName.antigravity,
+        "inspect the workspace",
+        RunMode.read_only,
+        cwd,
+        config,
+    )
+
+    print_index = command.index("--print")
+    assert command[print_index + 1].endswith("Task:\ninspect the workspace")
+    assert command[print_index + 2 : print_index + 4] == ["--print-timeout", "30m"]
+    assert stdin_prompt is None

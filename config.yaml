@@ -20,6 +20,9 @@ security:
     - "/Users/jaehyunlee/tmp"
     - "/Users/jaehyunlee/hermes-workspaces"
     - "/Users/jaehyunlee/coding"
+    - "/Users/jaehyunlee/.hermes-invest/profiles/invest-bot/workspace"
+    - "/Users/jaehyunlee/.hermes-research/profiles/research-bot/workspace"
+    - "/Users/jaehyunlee/.hermes-youtube/profiles/youtube-bot/workspace"
   denied_paths:
     - "/Users/jaehyunlee/.ssh"
     - "/Users/jaehyunlee/.aws"
@@ -31,8 +34,8 @@ security:
 
 agents:
   antigravity:
-    # CLI 자체의 강제 read-only가 없어 기본 비활성화한다.
-    enabled: false
+    # CLI sandbox와 macOS sandbox-exec를 함께 적용한다.
+    enabled: true
     command: "/Users/jaehyunlee/.local/bin/agy"
     default_args: []
     priority: 1
@@ -92,6 +95,7 @@ profiles:
       - "/Users/jaehyunlee/hermes-workspaces"
       - "/Users/jaehyunlee/coding"
     allowed_agents:
+      - "antigravity"
       - "codex"
       - "opencode"
     allowed_modes:
@@ -103,6 +107,42 @@ profiles:
     context:
       language: "한국어"
       environment: "macOS host에서 실행되며 Docker의 Hermes dev-bot이 MCP로 호출"
+  invest-bot:
+    token_env: "HOST_CODING_AGENT_INVEST_BOT_TOKEN"
+    allowed_roots:
+      - "/Users/jaehyunlee/.hermes-invest/profiles/invest-bot/workspace"
+    allowed_agents: ["antigravity", "codex", "opencode"]
+    allowed_modes: ["read_only", "propose_patch"]
+    default_cwd: "/Users/jaehyunlee/.hermes-invest/profiles/invest-bot/workspace"
+    default_agent: "auto"
+    default_mode: "propose_patch"
+    context:
+      language: "한국어"
+      environment: "Hermes invest-bot 전용 workspace"
+  research-bot:
+    token_env: "HOST_CODING_AGENT_RESEARCH_BOT_TOKEN"
+    allowed_roots:
+      - "/Users/jaehyunlee/.hermes-research/profiles/research-bot/workspace"
+    allowed_agents: ["antigravity", "codex", "opencode"]
+    allowed_modes: ["read_only", "propose_patch"]
+    default_cwd: "/Users/jaehyunlee/.hermes-research/profiles/research-bot/workspace"
+    default_agent: "auto"
+    default_mode: "propose_patch"
+    context:
+      language: "한국어"
+      environment: "Hermes research-bot 전용 workspace"
+  youtube-bot:
+    token_env: "HOST_CODING_AGENT_YOUTUBE_BOT_TOKEN"
+    allowed_roots:
+      - "/Users/jaehyunlee/.hermes-youtube/profiles/youtube-bot/workspace"
+    allowed_agents: ["antigravity", "codex", "opencode"]
+    allowed_modes: ["read_only", "propose_patch"]
+    default_cwd: "/Users/jaehyunlee/.hermes-youtube/profiles/youtube-bot/workspace"
+    default_agent: "auto"
+    default_mode: "propose_patch"
+    context:
+      language: "한국어"
+      environment: "Hermes youtube-bot 전용 workspace"
 
 logging:
   path: "logs/calls.jsonl"
