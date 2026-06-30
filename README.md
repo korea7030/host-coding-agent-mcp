@@ -160,15 +160,32 @@ Telegram 세션으로 반환되는 end-to-end 경로를 검증했다.
 
 ## Hermes profile 지침
 
-각 profile의 system instruction에 다음 정책을 추가한다.
+모든 profile에 `development-policy` Hermes plugin을 설치한다. 이 plugin은 매 turn에
+MCP routing 정책을 주입하고 `pre_tool_call`에서 native 실행·쓰기 도구를 dispatch 전에
+차단한다.
 
-```text
-host 프로젝트 코드 작업에는 MCP server host-coding-agent를 사용한다.
-기본 호출은 run_coding_agent(agent="auto", mode="propose_patch")다.
-대규모 리팩토링, 테스트 작성, 구조 변경, migration, multi-file 작업은 OpenCode를 우선한다.
-사용자가 명시적으로 승인하기 전에는 apply_patch를 요청하지 않는다.
-결과는 요약, 변경 계획, diff, 테스트 방법 순서로 보고한다.
+```bash
+./scripts/install-hermes-policy.sh hermes-dev dev-bot
+./scripts/install-hermes-policy.sh hermes-invest invest-bot
+./scripts/install-hermes-policy.sh hermes-research research-bot
+./scripts/install-hermes-policy.sh hermes-youtube youtube-bot
 ```
+
+차단 도구:
+
+- `terminal`
+- `execute_code`
+- `write_file`
+- `patch`
+- `delegate_task`
+
+허용되는 개발 경로는 `mcp_host_coding_agent_*` 도구다. MCP 실패 시 native 도구로
+fallback하지 않고 오류를 보고한다. 정책은 fail-closed이므로 plugin이 활성화된
+profile에서는 비개발 목적이라도 위 native 도구를 사용할 수 없다.
+
+정책 명세는 `docs/DEVELOPMENT_ENFORCEMENT.md`, 배포 원본은
+`hermes_plugins/development-policy`에 있다. installer는 plugin enable과 SOUL 정책
+block을 idempotent하게 적용한다. 적용 후 해당 Hermes gateway/container를 재시작한다.
 
 ## Profile 설정
 

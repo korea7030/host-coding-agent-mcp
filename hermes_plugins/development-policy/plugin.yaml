@@ -1,0 +1,6 @@
+name: development-policy
+version: "1.0.0"
+description: Force host development through the host-coding-agent MCP server
+provides_hooks:
+  - pre_llm_call
+  - pre_tool_call
