@@ -5,6 +5,7 @@ from host_coding_agent.auth import ProfileTokenVerifier, build_auth_provider
 from host_coding_agent.models import (
     AgentName,
     ExecutionContext,
+    PathMapping,
     ProfileConfig,
     RunMode,
 )
@@ -138,6 +139,43 @@ def test_profile_rejects_cwd_outside_profile_root(config, tmp_path):
             config=config,
             assistant_id=None,
             cwd=str(other),
+            agent=None,
+            mode=None,
+            context=None,
+        )
+
+
+def test_profile_maps_container_workspace_to_host(config):
+    root = _enable_profile(config)
+    container_root = "/opt/data/profiles/dev-bot/workspace"
+    config.profiles["dev-bot"].path_mappings = [
+        PathMapping(container_root=container_root, host_root=root)
+    ]
+    child = root / "repo"
+    child.mkdir()
+
+    resolved = resolve_profile_request(
+        access_token=_access_token(),
+        config=config,
+        assistant_id=None,
+        cwd=f"{container_root}/repo",
+        agent=None,
+        mode=None,
+        context=None,
+    )
+
+    assert resolved.cwd == str(child)
+
+
+def test_profile_does_not_map_entire_container_data_root(config):
+    _enable_profile(config)
+
+    with pytest.raises(ValueError, match="existing directory|not allowed"):
+        resolve_profile_request(
+            access_token=_access_token(),
+            config=config,
+            assistant_id=None,
+            cwd="/opt/data",
             agent=None,
             mode=None,
             context=None,

@@ -222,6 +222,10 @@ profiles:
     token_env: HOST_CODING_AGENT_DEV_BOT_TOKEN
     allowed_roots:
       - /Users/jaehyunlee/projects
+      - /Users/jaehyunlee/.hermes-dev/profiles/dev-bot/workspace
+    path_mappings:
+      - container_root: /opt/data/profiles/dev-bot/workspace
+        host_root: /Users/jaehyunlee/.hermes-dev/profiles/dev-bot/workspace
     allowed_agents: [antigravity, codex, opencode]
     allowed_modes: [read_only, propose_patch]
     default_cwd: /Users/jaehyunlee/projects
@@ -238,8 +242,15 @@ profiles:
 적용되는 상한선이다. profile 추가 시 고유한 `token_env`를 지정하고 해당 환경변수에는
 최소 32자 이상의 고유 token을 설정한다.
 
+`path_mappings`는 Docker 내부 workspace 경로를 host 경로로 변환한다. 매핑은
+인증된 profile에만 적용되고 `host_root`는 해당 profile의 `allowed_roots` 내부여야
+한다. `/opt/data` 전체를 매핑하지 말고 profile workspace만 지정한다. Hermes의
+`mcp_servers.host-coding-agent.timeout`은 장기 agent 실행을 고려해 900초로 설정한다.
+
 ## 알려진 제한
 
 - Origin/Host 검증과 동시 실행 제한은 아직 구현하지 않았다.
 - timeout은 process group을 종료하지만 스스로 새 session으로 daemonize한 하위 프로세스까지 완전하게 회수하지는 못한다. 장기 작업 queue 전에 별도 worker 격리가 필요하다.
 - 비동기 queue, job id, external approval flow는 후속 단계다.
+- 동기 호출 결과가 매우 크면 Hermes/Codex 자체 응답 제한에 걸릴 수 있으므로 작업을
+  작은 범위로 분리해야 한다. 근본 해결은 비동기 job queue와 paginated result다.

@@ -63,6 +63,28 @@ def load_config(path: str | Path) -> AppConfig:
                 for denied in config.security.denied_paths
             ):
                 raise ConfigError(f"profile {name!r} root is denied: {root}")
+        seen_container_roots: set[Path] = set()
+        for mapping in profile.path_mappings:
+            container_root = mapping.container_root.expanduser()
+            if not container_root.is_absolute():
+                raise ConfigError(
+                    f"profile {name!r} container_root must be absolute"
+                )
+            container_root = Path(os.path.normpath(container_root))
+            if container_root in seen_container_roots:
+                raise ConfigError(
+                    f"profile {name!r} has duplicate container_root: {container_root}"
+                )
+            seen_container_roots.add(container_root)
+            mapping.container_root = container_root
+            mapping.host_root = _canonical_directory(mapping.host_root)
+            if not any(
+                mapping.host_root == root or mapping.host_root.is_relative_to(root)
+                for root in profile.allowed_roots
+            ):
+                raise ConfigError(
+                    f"profile {name!r} mapped host_root is outside its allowed roots"
+                )
         if profile.default_cwd is not None:
             profile.default_cwd = _canonical_directory(profile.default_cwd)
             if not any(
@@ -106,10 +128,24 @@ def validate_cwd(value: str | Path, config: AppConfig) -> Path:
 def validate_profile_cwd(
     value: str | Path, profile_name: str, config: AppConfig
 ) -> Path:
-    resolved = validate_cwd(value, config)
     profile = config.profiles.get(profile_name)
     if profile is None:
         raise ConfigError("unknown authenticated profile")
+    raw = Path(value).expanduser()
+    if not raw.is_absolute():
+        raise ConfigError("cwd must be an absolute path")
+    normalized = Path(os.path.normpath(raw))
+    matches = [
+        mapping
+        for mapping in profile.path_mappings
+        if normalized == mapping.container_root
+        or normalized.is_relative_to(mapping.container_root)
+    ]
+    if matches:
+        mapping = max(matches, key=lambda item: len(item.container_root.parts))
+        relative = normalized.relative_to(mapping.container_root)
+        raw = mapping.host_root / relative
+    resolved = validate_cwd(raw, config)
     if not any(
         resolved == root or resolved.is_relative_to(root)
         for root in profile.allowed_roots

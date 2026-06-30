@@ -24,7 +24,11 @@ authenticated `host-coding-agent` MCP server.
 - `mcp_host_coding_agent_run_codex`
 - `mcp_host_coding_agent_run_opencode`
 
-The normal default is `run_coding_agent(agent="auto", mode="propose_patch")`.
+The normal default is
+`run_coding_agent(agent="auto", mode="propose_patch", timeout_sec=900)`.
+Hermes passes its container workspace path as `cwd`; the MCP translates only
+the profile-scoped workspace alias to the corresponding host path. `/opt/data`
+as a whole is never mapped.
 
 ## Blocked native tools
 

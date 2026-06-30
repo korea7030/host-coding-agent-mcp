@@ -22,19 +22,27 @@ def _sha256_bytes(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
-def _normalize_diff_path(value: str) -> str | None:
+def _normalize_diff_path(value: str, cwd: Path | None = None) -> str | None:
     candidate = value.strip()
     if not candidate or candidate == "/dev/null":
         return None
     if candidate.startswith(("a/", "b/")):
         candidate = candidate[2:]
     path = PurePosixPath(candidate)
-    if path.is_absolute() or not path.parts or any(part in {"", ".", ".."} for part in path.parts):
+    if path.is_absolute():
+        if cwd is None:
+            raise ArtifactError(f"unsafe diff path: {value}")
+        root = Path(os.path.realpath(cwd))
+        absolute = Path(os.path.realpath(candidate))
+        if absolute == root or not absolute.is_relative_to(root):
+            raise ArtifactError(f"unsafe diff path: {value}")
+        path = PurePosixPath(absolute.relative_to(root).as_posix())
+    if not path.parts or any(part in {"", ".", ".."} for part in path.parts):
         raise ArtifactError(f"unsafe diff path: {value}")
     return path.as_posix()
 
 
-def extract_diff_paths(diff_text: str) -> list[str]:
+def extract_diff_paths(diff_text: str, cwd: Path | None = None) -> list[str]:
     paths: set[str] = set()
     for line in diff_text.splitlines():
         values: list[str] = []
@@ -50,7 +58,7 @@ def extract_diff_paths(diff_text: str) -> list[str]:
             # Unified diff timestamps, when present, are tab-separated.
             values.append(line[4:].split("\t", 1)[0])
         for value in values:
-            normalized = _normalize_diff_path(value)
+            normalized = _normalize_diff_path(value, cwd)
             if normalized is not None:
                 paths.add(normalized)
     if not paths:
@@ -69,7 +77,7 @@ def _reject_symlink_components(root: Path, relative_path: str) -> None:
 def snapshot_base_files(cwd: Path, diff_text: str) -> dict[str, str | None]:
     root = Path(os.path.realpath(cwd))
     snapshots: dict[str, str | None] = {}
-    for relative_path in extract_diff_paths(diff_text):
+    for relative_path in extract_diff_paths(diff_text, root):
         _reject_symlink_components(root, relative_path)
         target = Path(os.path.realpath(root / relative_path))
         if target != root and not target.is_relative_to(root):

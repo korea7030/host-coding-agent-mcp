@@ -128,6 +128,42 @@ def test_rejects_path_traversal_and_absolute_paths(tmp_path):
             )
 
 
+def test_accepts_absolute_diff_path_inside_workspace(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "app.py"
+    target.write_text("old\n")
+    store = _store(tmp_path)
+
+    proposal = store.create(
+        profile="dev-bot",
+        cwd=workspace,
+        agent=AgentName.codex,
+        task="change app",
+        diff_text=_diff(str(target)),
+    )
+
+    assert proposal["base_files"] == {
+        "app.py": "sha256:" + hashlib.sha256(b"old\n").hexdigest()
+    }
+
+
+def test_rejects_absolute_diff_path_outside_workspace(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.py"
+    store = _store(tmp_path)
+
+    with pytest.raises(ArtifactError, match="unsafe diff path"):
+        store.create(
+            profile="dev-bot",
+            cwd=workspace,
+            agent=AgentName.codex,
+            task="escape",
+            diff_text=_diff(str(outside)),
+        )
+
+
 def test_rejects_symlink_path(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
