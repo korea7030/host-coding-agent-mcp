@@ -145,6 +145,12 @@ launchctl print gui/$(id -u)/com.jaehyunlee.host-coding-agent-mcp
 2026-06-28에 사용자 LaunchAgent 등록과 `RunAtLoad`/`KeepAlive` 동작을 검증했다.
 job에 `SIGTERM`을 보낸 뒤 launchd가 새 PID로 서버를 자동 재시작했고, 재시작 후
 Bearer 인증과 Hermes `dev-bot` MCP 연결도 정상 동작했다.
+launchd의 기본 PATH에는 Node.js가 없으므로 설치 스크립트가 현재 Node.js bin
+디렉터리를 plist의 PATH에 포함한다. 기존 job을 완전히 unload할 때까지 기다린 후
+새 plist를 bootstrap한다.
+
+2026-06-30에 Telegram dev-bot 요청이 Bearer 인증 MCP를 거쳐 Codex를 실행하고
+Telegram 세션으로 반환되는 end-to-end 경로를 검증했다.
 
 로그:
 
