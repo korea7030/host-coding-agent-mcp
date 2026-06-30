@@ -26,7 +26,8 @@ ROUTING_CONTEXT = """Development execution policy:
 - Default to mcp_host_coding_agent_run_coding_agent with agent="auto" and mode="propose_patch".
 - Never use terminal, execute_code, write_file, patch, delegate_task, or a directly launched coding-agent CLI for development.
 - If host-coding-agent MCP fails, report the failure. Do not fall back to a native development tool.
-- Coding agents are read-only and may only return findings or a proposed diff until a separate human approval is verified."""
+- Coding agents are read-only and may only return findings or a proposed diff until a separate human approval is verified.
+- When a proposal_id is returned, show the proposal_id and proposal_sha256 to the user. Do not claim that the patch was applied."""
 
 
 def normalize_tool_name(tool_name: str) -> str:

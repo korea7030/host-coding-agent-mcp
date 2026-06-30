@@ -93,6 +93,13 @@ class LoggingConfig(BaseModel):
     task_preview_chars: int = 0
 
 
+class ArtifactConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: Path = Path("artifacts/proposals.db")
+    proposal_ttl_sec: int = Field(default=86_400, ge=300, le=2_592_000)
+    max_diff_chars: int = Field(default=1_000_000, ge=1_000, le=10_000_000)
+
+
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     server: ServerConfig
@@ -102,6 +109,7 @@ class AppConfig(BaseModel):
     auth: AuthConfig = Field(default_factory=AuthConfig)
     profiles: dict[str, ProfileConfig] = Field(default_factory=dict)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    artifacts: ArtifactConfig = Field(default_factory=ArtifactConfig)
 
 
 class AttemptResult(BaseModel):
@@ -128,6 +136,9 @@ class RunResult(BaseModel):
     stderr: str = ""
     summary: str = ""
     proposed_diff: str = ""
+    proposal_id: str | None = None
+    proposal_sha256: str | None = None
+    artifact_error: str | None = None
     redacted: bool = False
     results: list[AttemptResult] = Field(default_factory=list)
     error: str | None = None

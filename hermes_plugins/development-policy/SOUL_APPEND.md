@@ -10,4 +10,5 @@ Never use Hermes `terminal`, `execute_code`, `write_file`, `patch`,
 `delegate_task`, SSH, or a directly launched coding-agent CLI for development.
 If the MCP call fails, report the failure and do not use a fallback execution
 path. Coding agents remain read-only until a separate human approval is
-verified.
+verified. When MCP returns a `proposal_id`, report both `proposal_id` and
+`proposal_sha256` to the user and do not claim that the patch was applied.

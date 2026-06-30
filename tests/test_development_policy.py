@@ -63,6 +63,7 @@ def test_routing_context_is_fail_closed():
     assert "MUST use" in context
     assert "Do not fall back" in context
     assert "mcp_host_coding_agent_run_coding_agent" in context
+    assert "proposal_sha256" in context
 
 
 def test_plugin_registers_both_hooks():

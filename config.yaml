@@ -147,3 +147,8 @@ profiles:
 logging:
   path: "logs/calls.jsonl"
   task_preview_chars: 0
+
+artifacts:
+  path: "artifacts/proposals.db"
+  proposal_ttl_sec: 86400
+  max_diff_chars: 1000000
