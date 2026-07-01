@@ -4,6 +4,7 @@ import yaml
 import pytest
 
 import server
+from host_coding_agent.approvals import ApprovalStore
 from host_coding_agent.models import AgentName, RunMode, RunResult
 
 
@@ -68,3 +69,10 @@ async def test_propose_patch_result_is_stored_and_exposed_by_mcp(
     assert list_data is not None and list_data["ok"]
     assert len(list_data["proposals"]) == 1
     assert "diff_text" not in list_data["proposals"][0]
+
+    approval = ApprovalStore(config.artifacts.path).get_for_proposal(
+        run_data["proposal_id"],
+        profile="anonymous",
+    )
+    assert approval["status"] == "pending"
+    assert approval["proposal_sha256"] == run_data["proposal_sha256"]

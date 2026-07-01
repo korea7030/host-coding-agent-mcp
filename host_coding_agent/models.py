@@ -51,6 +51,7 @@ class ProfileConfig(BaseModel):
     token_env: str = Field(min_length=1, max_length=200)
     allowed_roots: list[Path]
     path_mappings: list[PathMapping] = Field(default_factory=list)
+    approval_identities: list[str] = Field(default_factory=list)
     allowed_agents: list[AgentName] = Field(
         default_factory=lambda: [AgentName.codex, AgentName.opencode]
     )

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 PLUGIN_DIR = (
     Path(__file__).resolve().parents[1]
@@ -66,19 +67,63 @@ def test_routing_context_is_fail_closed():
     assert "proposal_sha256" in context
 
 
-def test_plugin_registers_both_hooks():
+def test_plugin_registers_hooks_and_approval_commands():
     plugin = _load_module(
         "__init__.py",
         "development_policy_plugin",
         package=True,
     )
     registered = {}
+    commands = {}
 
     class FakeContext:
         def register_hook(self, name, callback):
             registered[name] = callback
 
+        def register_command(self, name, handler, **kwargs):
+            commands[name] = (handler, kwargs)
+
     plugin.register(FakeContext())
 
     assert registered["pre_llm_call"] is plugin.on_pre_llm_call
     assert registered["pre_tool_call"] is plugin.on_pre_tool_call
+    assert registered["pre_gateway_dispatch"] is plugin.on_pre_gateway_dispatch
+    assert set(commands) == {"proposal", "apply-proposal", "reject"}
+
+
+def test_gateway_hook_captures_telegram_identity_for_approval(monkeypatch):
+    event = SimpleNamespace(
+        text="/apply-proposal proposal-id sha256:value",
+        source=SimpleNamespace(
+            platform=SimpleNamespace(value="telegram"),
+            user_id="123",
+        ),
+    )
+    policy.on_pre_gateway_dispatch(event=event)
+    monkeypatch.setenv("MCP_HOST_CODING_AGENT_API_KEY", "x" * 32)
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def read(self):
+            return b'{"ok": true, "approval": {"proposal_id": "proposal-id", "status": "applied"}, "changed_files": ["app.py"]}'
+
+    def fake_urlopen(request, timeout):
+        captured["body"] = request.data
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(policy.urllib.request, "urlopen", fake_urlopen)
+    result = policy._approval_request(
+        "approve",
+        "proposal-id sha256:value",
+    )
+
+    assert result["ok"]
+    assert b'"telegram_user_id": "123"' in captured["body"]
+    assert captured["timeout"] == 60

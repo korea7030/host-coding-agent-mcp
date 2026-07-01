@@ -48,13 +48,15 @@ the Hermes containers.
 
 ## Approval boundary
 
-The coding agents remain read-only. A future patch-application service must:
+The coding agents remain read-only. Patch application is performed only by the
+external Telegram `/apply-proposal` gateway command. The host endpoint:
 
-- persist immutable proposal artifacts with SHA-256 hashes;
-- receive approval from a gateway command handled outside the LLM tool loop;
-- bind approval to profile, user, workspace, proposal, and expiry;
-- reject replay, stale base files, path traversal, and symlink escapes;
-- run `git apply --check` before applying;
-- retain an audit event and rollback artifact.
+- authenticates the profile bearer token and Telegram user allowlist;
+- binds approval to profile, user, workspace, proposal hash, and expiry;
+- rejects replay, stale base files, changed Git HEAD, path traversal, symlink
+  escapes, and binary patches;
+- runs `git apply --check` before applying;
+- stores append-only approval events and result hashes;
+- reverses the patch if post-apply audit completion fails.
 
 An LLM-visible MCP tool call is not proof of human approval.

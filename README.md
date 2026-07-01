@@ -247,10 +247,25 @@ profiles:
 한다. `/opt/data` 전체를 매핑하지 말고 profile workspace만 지정한다. Hermes의
 `mcp_servers.host-coding-agent.timeout`은 장기 agent 실행을 고려해 900초로 설정한다.
 
+`approval_identities`에는 해당 profile의 proposal을 승인할 수 있는 외부 identity만
+등록한다. 예: `telegram:7965486003`. 일반 MCP agent profile의 `allowed_modes`에는
+`apply_patch`를 추가하지 않는다. 실제 적용 권한은 LLM-visible MCP tool이 아니라
+`/approval/telegram` 외부 endpoint의 제한된 applier에만 있다.
+
+Telegram 승인 명령:
+
+- `/proposal <proposal_id>`: immutable diff와 hash 검토
+- `/apply-proposal <proposal_id> <proposal_sha256>`: 승인, 재검증, patch 적용
+- `/reject <proposal_id> <proposal_sha256>`: 거절
+
+승인 적용 시 profile/token/Telegram user/hash/만료/Git HEAD/base file/path/symlink를
+재검증하고 `git apply --check` 후 적용한다. 승인 상태와 이벤트는 SQLite에 기록되며
+재사용할 수 없다.
+
 ## 알려진 제한
 
 - Origin/Host 검증과 동시 실행 제한은 아직 구현하지 않았다.
 - timeout은 process group을 종료하지만 스스로 새 session으로 daemonize한 하위 프로세스까지 완전하게 회수하지는 못한다. 장기 작업 queue 전에 별도 worker 격리가 필요하다.
-- 비동기 queue, job id, external approval flow는 후속 단계다.
+- 비동기 queue와 job id는 후속 단계다.
 - 동기 호출 결과가 매우 크면 Hermes/Codex 자체 응답 제한에 걸릴 수 있으므로 작업을
   작은 범위로 분리해야 한다. 근본 해결은 비동기 job queue와 paginated result다.

@@ -99,6 +99,7 @@ profiles:
     path_mappings:
       - container_root: "/opt/data/profiles/dev-bot/workspace"
         host_root: "/Users/jaehyunlee/.hermes-dev/profiles/dev-bot/workspace"
+    approval_identities: ["telegram:7965486003"]
     allowed_agents:
       - "antigravity"
       - "codex"
@@ -119,6 +120,7 @@ profiles:
     path_mappings:
       - container_root: "/opt/data/profiles/invest-bot/workspace"
         host_root: "/Users/jaehyunlee/.hermes-invest/profiles/invest-bot/workspace"
+    approval_identities: ["telegram:7965486003"]
     allowed_agents: ["antigravity", "codex", "opencode"]
     allowed_modes: ["read_only", "propose_patch"]
     default_cwd: "/Users/jaehyunlee/.hermes-invest/profiles/invest-bot/workspace"
@@ -134,6 +136,7 @@ profiles:
     path_mappings:
       - container_root: "/opt/data/profiles/research-bot/workspace"
         host_root: "/Users/jaehyunlee/.hermes-research/profiles/research-bot/workspace"
+    approval_identities: ["telegram:7965486003"]
     allowed_agents: ["antigravity", "codex", "opencode"]
     allowed_modes: ["read_only", "propose_patch"]
     default_cwd: "/Users/jaehyunlee/.hermes-research/profiles/research-bot/workspace"
@@ -149,6 +152,7 @@ profiles:
     path_mappings:
       - container_root: "/opt/data/profiles/youtube-bot/workspace"
         host_root: "/Users/jaehyunlee/.hermes-youtube/profiles/youtube-bot/workspace"
+    approval_identities: ["telegram:7965486003"]
     allowed_agents: ["antigravity", "codex", "opencode"]
     allowed_modes: ["read_only", "propose_patch"]
     default_cwd: "/Users/jaehyunlee/.hermes-youtube/profiles/youtube-bot/workspace"

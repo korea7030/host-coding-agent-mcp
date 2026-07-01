@@ -18,6 +18,7 @@ dev = [
 
 [project.scripts]
 host-coding-agent-mcp = "server:main"
+host-coding-agent-approval = "host_coding_agent.approval_cli:main"
 
 [build-system]
 requires = ["hatchling"]

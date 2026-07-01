@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import contextvars
+import json
+import os
+import urllib.error
+import urllib.request
 from typing import Any
 
 ALLOWED_DEVELOPMENT_MCP_TOOLS = frozenset(
@@ -29,7 +35,114 @@ ROUTING_CONTEXT = """Development execution policy:
 - Never use terminal, execute_code, write_file, patch, delegate_task, or a directly launched coding-agent CLI for development.
 - If host-coding-agent MCP fails, report the failure. Do not fall back to a native development tool.
 - Coding agents are read-only and may only return findings or a proposed diff until a separate human approval is verified.
-- When a proposal_id is returned, show the proposal_id and proposal_sha256 to the user. Do not claim that the patch was applied."""
+- When a proposal_id is returned, show the proposal_id and proposal_sha256 to the user.
+- Only the external Telegram /apply-proposal command may apply a proposal. Do not claim that a patch was applied unless that command returns status=applied."""
+
+_telegram_command_context: contextvars.ContextVar[tuple[str, str] | None] = (
+    contextvars.ContextVar("development_policy_telegram_command", default=None)
+)
+
+
+def on_pre_gateway_dispatch(event: Any = None, **_: Any) -> None:
+    text = str(getattr(event, "text", "") or "").strip()
+    command = text.split(maxsplit=1)[0].split("@", 1)[0].casefold()
+    source = getattr(event, "source", None)
+    platform = getattr(getattr(source, "platform", None), "value", None)
+    user_id = getattr(source, "user_id", None)
+    if (
+        command in {"/proposal", "/apply-proposal", "/reject"}
+        and platform == "telegram"
+        and user_id
+    ):
+        _telegram_command_context.set((str(user_id), command.lstrip("/")))
+
+
+def _approval_request(action: str, raw_args: str) -> dict[str, Any]:
+    identity = _telegram_command_context.get()
+    if identity is None:
+        raise ValueError("Telegram command identity is unavailable")
+    user_id, captured_action = identity
+    expected_command = {
+        "show": "proposal",
+        "approve": "apply-proposal",
+    }.get(action, action)
+    if captured_action != expected_command:
+        raise ValueError("Telegram command context mismatch")
+    parts = raw_args.strip().split()
+    required = 1 if action == "show" else 2
+    if len(parts) != required:
+        suffix = " <proposal_sha256>" if required == 2 else ""
+        raise ValueError(f"Usage: /{expected_command} <proposal_id>{suffix}")
+    payload = {
+        "action": action,
+        "proposal_id": parts[0],
+        "telegram_user_id": user_id,
+    }
+    if required == 2:
+        payload["proposal_sha256"] = parts[1]
+    token = os.environ.get("MCP_HOST_CODING_AGENT_API_KEY", "")
+    if not token:
+        raise ValueError("MCP approval credential is unavailable")
+    request = urllib.request.Request(
+        "http://host.docker.internal:8787/approval/telegram",
+        data=json.dumps(payload).encode(),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = json.loads(exc.read()).get("error", str(exc))
+        except Exception:
+            detail = str(exc)
+        raise ValueError(detail) from exc
+
+
+def _format_approval_result(result: dict[str, Any]) -> str:
+    if not result.get("ok"):
+        return f"Approval failed: {result.get('error', 'unknown error')}"
+    proposal = result.get("proposal")
+    approval = result.get("approval", {})
+    if isinstance(proposal, dict):
+        diff = str(proposal.get("diff_text", ""))
+        if len(diff) > 3000:
+            diff = diff[:3000] + "\n... (truncated; verify by proposal hash)"
+        return (
+            f"Proposal: {proposal['proposal_id']}\n"
+            f"SHA-256: {proposal['diff_sha256']}\n"
+            f"Status: {approval['status']}\n"
+            f"Workspace: {proposal['cwd']}\n\n{diff}"
+        )
+    if approval.get("status") == "applied":
+        files = ", ".join(result.get("changed_files", []))
+        return f"Patch applied: {approval['proposal_id']}\nChanged files: {files}"
+    return (
+        f"Proposal {approval.get('proposal_id', '')}: "
+        f"{approval.get('status', 'updated')}"
+    )
+
+
+async def handle_proposal(raw_args: str) -> str:
+    return _format_approval_result(
+        await asyncio.to_thread(_approval_request, "show", raw_args)
+    )
+
+
+async def handle_approve(raw_args: str) -> str:
+    return _format_approval_result(
+        await asyncio.to_thread(_approval_request, "approve", raw_args)
+    )
+
+
+async def handle_reject(raw_args: str) -> str:
+    return _format_approval_result(
+        await asyncio.to_thread(_approval_request, "reject", raw_args)
+    )
 
 
 def normalize_tool_name(tool_name: str) -> str:
