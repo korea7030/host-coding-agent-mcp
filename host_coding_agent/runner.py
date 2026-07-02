@@ -461,6 +461,9 @@ def run_managed_worktree_agent(
         raise SecurityViolation("worktree job is not ready for agent execution")
     worktree = manager.validate_checkout(job_id, profile=profile)
     validate_task(task)
+    task_hash = "sha256:" + hashlib.sha256(task.encode()).hexdigest()
+    if task_hash != job.task_hash:
+        raise SecurityViolation("task does not match immutable worktree job")
     if assistant_id and assistant_id != profile:
         raise SecurityViolation("assistant_id does not match worktree profile")
     if context:
@@ -508,6 +511,12 @@ def run_managed_worktree_agent(
             profile=profile,
             status=WorktreeStatus.failed,
         )
+    else:
+        manager.record_selected_agent(
+            job_id,
+            profile=profile,
+            agent=selected,
+        )
     final = attempts[-1] if attempts else None
     final_text = _agent_text(final) if final else ""
     result = RunResult(
@@ -540,7 +549,7 @@ def run_managed_worktree_agent(
             "requested_agent": agent.value,
             "repository": str(job.repository),
             "worktree": str(worktree),
-            "task_hash": "sha256:" + hashlib.sha256(task.encode()).hexdigest(),
+            "task_hash": task_hash,
             "duration_sec": round(time.monotonic() - started, 3),
             "ok": result.ok,
             "attempts": [

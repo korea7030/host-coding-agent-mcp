@@ -6,8 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from host_coding_agent.models import DeliveryMode, WorktreeStatus
-from host_coding_agent.models import AgentName, AttemptResult
+from host_coding_agent.models import (
+    AgentName,
+    AttemptResult,
+    DeliveryMode,
+    WorktreeStatus,
+)
 from host_coding_agent.runner import run_managed_worktree_agent
 from host_coding_agent.worktrees import WorktreeError, WorktreeManager
 
@@ -39,6 +43,34 @@ def _manager(tmp_path: Path) -> WorktreeManager:
         state_path=tmp_path / "state" / "worktrees.db",
         ttl_sec=3600,
     )
+
+
+def test_migrates_existing_delivery_target_table(tmp_path):
+    state_path = tmp_path / "state" / "worktrees.db"
+    state_path.parent.mkdir()
+    with sqlite3.connect(state_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE worktree_delivery_targets (
+                job_id TEXT PRIMARY KEY,
+                base_branch TEXT,
+                remote_name TEXT,
+                remote_url TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+
+    _manager(tmp_path)
+
+    with sqlite3.connect(state_path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(worktree_delivery_targets)"
+            )
+        }
+    assert "remote_push_url" in columns
 
 
 def test_creates_managed_branch_and_worktree_without_changing_original(tmp_path):

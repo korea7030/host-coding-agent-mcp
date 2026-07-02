@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import (
+    AgentName,
     DeliveryMode,
     WorktreeCleanupResult,
     WorktreeJob,
@@ -138,6 +139,22 @@ class WorktreeManager:
                 );
                 CREATE INDEX IF NOT EXISTS worktree_test_runs_job_command
                     ON worktree_test_runs(job_id, command_index);
+                CREATE TABLE IF NOT EXISTS worktree_agent_results (
+                    job_id TEXT PRIMARY KEY,
+                    selected_agent TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(job_id) REFERENCES worktree_jobs(job_id)
+                );
+                CREATE TRIGGER IF NOT EXISTS worktree_agent_results_no_update
+                    BEFORE UPDATE ON worktree_agent_results
+                    BEGIN
+                        SELECT RAISE(ABORT, 'worktree agent results are immutable');
+                    END;
+                CREATE TRIGGER IF NOT EXISTS worktree_agent_results_no_delete
+                    BEFORE DELETE ON worktree_agent_results
+                    BEGIN
+                        SELECT RAISE(ABORT, 'worktree agent results cannot be deleted');
+                    END;
                 CREATE TABLE IF NOT EXISTS worktree_proposals (
                     job_id TEXT PRIMARY KEY,
                     proposal_id TEXT NOT NULL UNIQUE,
@@ -267,6 +284,29 @@ class WorktreeManager:
                     END;
                 """
             )
+            target_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(worktree_delivery_targets)"
+                ).fetchall()
+            }
+            if "remote_push_url" not in target_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE worktree_delivery_targets
+                    ADD COLUMN remote_push_url TEXT
+                    """
+                )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO worktree_delivery_targets (
+                    job_id, base_branch, remote_name, remote_url,
+                    remote_push_url, created_at
+                )
+                SELECT job_id, NULL, NULL, NULL, NULL, created_at
+                FROM worktree_jobs
+                """
+            )
         os.chmod(self.state_path, 0o600)
 
     def create(
@@ -277,10 +317,7 @@ class WorktreeManager:
         task: str,
         delivery_mode: DeliveryMode = DeliveryMode.manual,
     ) -> WorktreeJob:
-        requested = Path(os.path.realpath(repository))
-        repository_root = Path(
-            _run_git(["-C", str(requested), "rev-parse", "--show-toplevel"])
-        )
+        repository_root = self.repository_root(repository)
         self._validate_repository_state(repository_root)
         if self.root == repository_root or self.root.is_relative_to(repository_root):
             raise WorktreeError("managed worktree root must be outside the repository")
@@ -419,6 +456,12 @@ class WorktreeManager:
                 raise
             raise WorktreeError("could not persist worktree job") from exc
         return WorktreeJob.model_validate(record)
+
+    def repository_root(self, repository: Path) -> Path:
+        requested = Path(os.path.realpath(repository))
+        return Path(
+            _run_git(["-C", str(requested), "rev-parse", "--show-toplevel"])
+        )
 
     def transition(
         self,
@@ -563,6 +606,47 @@ class WorktreeManager:
         if row is None:
             raise WorktreeError("worktree proposal link not found")
         return dict(row)
+
+    def record_selected_agent(
+        self,
+        job_id: str,
+        *,
+        profile: str,
+        agent: AgentName,
+    ) -> None:
+        job = self.get(job_id, profile=profile)
+        if job.status != WorktreeStatus.active:
+            raise WorktreeError("worktree job is not active")
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO worktree_agent_results (
+                        job_id, selected_agent, created_at
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (
+                        job_id,
+                        agent.value,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise WorktreeError("worktree agent result already exists") from exc
+
+    def get_selected_agent(self, job_id: str, *, profile: str) -> AgentName:
+        self.get(job_id, profile=profile)
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT selected_agent FROM worktree_agent_results
+                WHERE job_id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            raise WorktreeError("worktree agent result not found")
+        return AgentName(row["selected_agent"])
 
     def get_delivery_target(
         self,

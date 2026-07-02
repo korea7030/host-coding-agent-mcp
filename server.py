@@ -22,9 +22,26 @@ from host_coding_agent.auth import build_auth_provider
 from host_coding_agent.approvals import ApprovalError, ApprovalStore
 from host_coding_agent.applier import PatchApplier, PatchApplyError
 from host_coding_agent.artifacts import ArtifactError, ProposalStore
+from host_coding_agent.automated_delivery import (
+    AutomatedDelivery,
+    AutomatedDeliveryError,
+)
+from host_coding_agent.config import validate_profile_cwd
 from host_coding_agent.delivery import ManualDelivery, ManualDeliveryError
-from host_coding_agent.profiles import authenticated_profile, resolve_profile_request
+from host_coding_agent.models import DeliveryMode, WorktreeStatus
+from host_coding_agent.profiles import (
+    authenticated_profile,
+    merge_context,
+    resolve_profile_request,
+)
+from host_coding_agent.proposals import (
+    WorktreeProposalError,
+    create_managed_worktree_proposal,
+)
+from host_coding_agent.runner import run_managed_worktree_agent
 from host_coding_agent.runtime import RuntimeRegistry
+from host_coding_agent.security import validate_task
+from host_coding_agent.testing import WorktreeTestError, run_managed_worktree_tests
 from host_coding_agent.worktrees import WorktreeError, WorktreeManager
 
 
@@ -62,6 +79,11 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
     manual_delivery = ManualDelivery(
         manager=worktree_manager,
         applier=patch_applier,
+    )
+    automated_delivery = AutomatedDelivery(
+        manager=worktree_manager,
+        proposals=proposal_store,
+        config=config,
     )
     mcp = FastMCP(
         "host-coding-agent",
@@ -149,6 +171,38 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
             return "anonymous"
         return authenticated_profile(get_access_token(), config)
 
+    def development_profile(assistant_id: str | None = None):
+        if not config.auth.enabled:
+            raise ConfigError("development jobs require profile authentication")
+        profile_name = authenticated_profile(get_access_token(), config)
+        if assistant_id is not None and assistant_id != profile_name:
+            raise SecurityViolation(
+                "assistant_id does not match authenticated profile"
+            )
+        return profile_name, config.profiles[profile_name]
+
+    def development_job_payload(job) -> dict:
+        payload = job.model_dump(mode="json")
+        payload["delivery_target"] = worktree_manager.get_delivery_target(
+            job.job_id,
+            profile=job.profile,
+        )
+        try:
+            payload["selected_agent"] = worktree_manager.get_selected_agent(
+                job.job_id,
+                profile=job.profile,
+            ).value
+        except WorktreeError:
+            payload["selected_agent"] = None
+        try:
+            payload["proposal"] = worktree_manager.get_proposal_link(
+                job.job_id,
+                profile=job.profile,
+            )
+        except WorktreeError:
+            payload["proposal"] = None
+        return payload
+
     @mcp.custom_route(
         "/runtime/register",
         methods=["POST"],
@@ -226,7 +280,26 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                     decided_by=actor,
                     decision_channel="telegram",
                 )
-                return JSONResponse({"ok": True, "approval": approval})
+                response = {"ok": True, "approval": approval}
+                found = worktree_manager.find_by_proposal(
+                    proposal_id,
+                    profile=profile_name,
+                )
+                if found is not None:
+                    job, _ = found
+                    if job.status.value == "proposed":
+                        worktree_manager.transition(
+                            job.job_id,
+                            profile=profile_name,
+                            status=WorktreeStatus.abandoned,
+                        )
+                        cleanup = worktree_manager.cleanup(
+                            job.job_id,
+                            profile=profile_name,
+                        )
+                        response["job_id"] = job.job_id
+                        response["cleanup"] = cleanup.model_dump(mode="json")
+                return JSONResponse(response)
             if action == "approve":
                 approval = approval_store.get_for_proposal(
                     proposal_id,
@@ -315,6 +388,247 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                 ),
             }
         except (ArtifactError, SecurityViolation, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @mcp.tool
+    def create_development_job(
+        task: str,
+        cwd: str | None = None,
+        delivery_mode: DeliveryMode = DeliveryMode.manual,
+        assistant_id: str | None = None,
+    ) -> dict:
+        """Create an isolated Git worktree job for the authenticated profile."""
+        try:
+            profile_name, profile = development_profile(assistant_id)
+            if delivery_mode not in profile.allowed_delivery_modes:
+                raise SecurityViolation(
+                    "delivery mode is not allowed for this profile"
+                )
+            if delivery_mode == DeliveryMode.report:
+                raise SecurityViolation("report delivery mode is not implemented")
+            validate_task(task)
+            requested_cwd = cwd or (
+                str(profile.default_cwd)
+                if profile.default_cwd is not None
+                else None
+            )
+            if requested_cwd is None:
+                raise ConfigError(
+                    "cwd is required because this profile has no default_cwd"
+                )
+            repository = validate_profile_cwd(
+                requested_cwd,
+                profile_name,
+                config,
+                runtime_registry=runtime_registry,
+            )
+            repository = worktree_manager.repository_root(repository)
+            validate_profile_cwd(
+                repository,
+                profile_name,
+                config,
+                runtime_registry=runtime_registry,
+            )
+            job = worktree_manager.create(
+                repository=repository,
+                profile=profile_name,
+                task=task,
+                delivery_mode=delivery_mode,
+            )
+            return {"ok": True, "job": development_job_payload(job)}
+        except (ConfigError, SecurityViolation, WorktreeError, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @mcp.tool
+    def run_development_job(
+        job_id: str,
+        task: str,
+        agent: AgentName | None = None,
+        timeout_sec: int = 900,
+        assistant_id: str | None = None,
+        context: ExecutionContext | None = None,
+    ) -> dict:
+        """Run a coding agent with write access limited to a managed worktree."""
+        try:
+            profile_name, profile = development_profile(assistant_id)
+            selected_agent = agent or profile.default_agent
+            if (
+                selected_agent != AgentName.auto
+                and selected_agent not in profile.allowed_agents
+            ):
+                raise SecurityViolation("agent is not allowed for this profile")
+            result = run_managed_worktree_agent(
+                manager=worktree_manager,
+                job_id=job_id,
+                profile=profile_name,
+                task=task,
+                agent=selected_agent,
+                timeout_sec=timeout_sec,
+                config=config,
+                assistant_id=profile_name,
+                context=merge_context(profile.context, context),
+                allowed_agents=set(profile.allowed_agents),
+            )
+            return result.model_dump(mode="json")
+        except (ConfigError, SecurityViolation, WorktreeError, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @mcp.tool
+    def test_development_job(
+        job_id: str,
+        assistant_id: str | None = None,
+    ) -> dict:
+        """Run trusted base-commit tests for an active development job."""
+        try:
+            profile_name, _ = development_profile(assistant_id)
+            result = run_managed_worktree_tests(
+                manager=worktree_manager,
+                job_id=job_id,
+                profile=profile_name,
+                config=config.worktrees,
+            )
+            return result.model_dump(mode="json")
+        except (
+            ConfigError,
+            SecurityViolation,
+            WorktreeError,
+            WorktreeTestError,
+            ValueError,
+        ) as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @mcp.tool
+    def propose_development_job(
+        job_id: str,
+        assistant_id: str | None = None,
+    ) -> dict:
+        """Create an immutable proposal from a tested worktree job."""
+        try:
+            profile_name, _ = development_profile(assistant_id)
+            selected_agent = worktree_manager.get_selected_agent(
+                job_id,
+                profile=profile_name,
+            )
+            result = create_managed_worktree_proposal(
+                manager=worktree_manager,
+                proposals=proposal_store,
+                approvals=approval_store,
+                job_id=job_id,
+                profile=profile_name,
+                agent=selected_agent,
+            )
+            return result.model_dump(mode="json")
+        except (
+            ArtifactError,
+            ConfigError,
+            SecurityViolation,
+            WorktreeError,
+            WorktreeProposalError,
+            ValueError,
+        ) as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @mcp.tool
+    def deliver_development_job(
+        job_id: str,
+        assistant_id: str | None = None,
+    ) -> dict:
+        """Deliver commit/auto/PR jobs; manual jobs await external approval."""
+        try:
+            profile_name, _ = development_profile(assistant_id)
+            job = worktree_manager.get(job_id, profile=profile_name)
+            if job.delivery_mode == DeliveryMode.manual:
+                if job.status.value == "delivered":
+                    return {
+                        "ok": True,
+                        "job_id": job_id,
+                        "delivery_status": job.status.value,
+                    }
+                link = worktree_manager.get_proposal_link(
+                    job_id,
+                    profile=profile_name,
+                )
+                approval = approval_store.get_for_proposal(
+                    link["proposal_id"],
+                    profile=profile_name,
+                )
+                return {
+                    "ok": False,
+                    "awaiting_approval": True,
+                    "proposal_id": link["proposal_id"],
+                    "proposal_sha256": link["proposal_sha256"],
+                    "approval_status": approval["status"],
+                }
+            return automated_delivery.deliver(
+                job_id=job_id,
+                profile=profile_name,
+            )
+        except (
+            ApprovalError,
+            AutomatedDeliveryError,
+            ConfigError,
+            SecurityViolation,
+            WorktreeError,
+            ValueError,
+        ) as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @mcp.tool
+    def get_development_job(
+        job_id: str,
+        assistant_id: str | None = None,
+    ) -> dict:
+        """Return one development job owned by the authenticated profile."""
+        try:
+            profile_name, _ = development_profile(assistant_id)
+            job = worktree_manager.get(job_id, profile=profile_name)
+            return {"ok": True, "job": development_job_payload(job)}
+        except (ConfigError, SecurityViolation, WorktreeError, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @mcp.tool
+    def list_development_jobs(
+        limit: int = 20,
+        assistant_id: str | None = None,
+    ) -> dict:
+        """List development jobs owned by the authenticated profile."""
+        try:
+            profile_name, _ = development_profile(assistant_id)
+            jobs = worktree_manager.list(profile=profile_name, limit=limit)
+            return {
+                "ok": True,
+                "jobs": [development_job_payload(job) for job in jobs],
+            }
+        except (ConfigError, SecurityViolation, WorktreeError, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @mcp.tool
+    def abandon_development_job(
+        job_id: str,
+        assistant_id: str | None = None,
+    ) -> dict:
+        """Abandon a non-delivered job, release its lock, and clean its worktree."""
+        try:
+            profile_name, _ = development_profile(assistant_id)
+            job = worktree_manager.get(job_id, profile=profile_name)
+            if job.status.value == "delivered":
+                raise WorktreeError("delivered jobs cannot be abandoned")
+            if job.status.value not in {"failed", "abandoned"}:
+                job = worktree_manager.transition(
+                    job_id,
+                    profile=profile_name,
+                    status=WorktreeStatus.abandoned,
+                )
+            cleanup = worktree_manager.cleanup(
+                job_id,
+                profile=profile_name,
+            )
+            return {
+                "ok": cleanup.ok,
+                "job": development_job_payload(job),
+                "cleanup": cleanup.model_dump(mode="json"),
+            }
+        except (ConfigError, SecurityViolation, WorktreeError, ValueError) as exc:
             return {"ok": False, "error": str(exc)}
 
     @mcp.tool

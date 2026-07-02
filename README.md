@@ -351,6 +351,26 @@ profiles:
 PR 기능은 host에서 인증된 `gh` CLI와 해당 remote에 대한 Git push 권한이 필요하다.
 기본 설정에서는 push와 PR 생성이 모두 비활성화되어 있다.
 
+### Worktree MCP job API
+
+인증된 Hermes profile은 다음 MCP tool로 worktree workflow를 단계별 실행한다.
+
+1. `create_development_job`: 대상 Git 저장소와 delivery mode를 고정하고 worktree 생성
+2. `run_development_job`: 동일 task를 전달해 허용된 coding agent를 worktree에서 실행
+3. `test_development_job`: base commit의 신뢰된 test policy 실행
+4. `propose_development_job`: 테스트된 변경을 immutable proposal로 저장
+5. `deliver_development_job`: commit/auto/PR delivery 실행. Manual은 approval 정보 반환
+6. `get_development_job`, `list_development_jobs`: profile 소유 job 상태 조회
+7. `abandon_development_job`: 미완료/실패 job의 lock 해제와 worktree 정리
+
+각 단계는 job ID와 인증 profile을 함께 검증한다. 실행 시 task가 job 생성 당시의
+SHA-256과 다르거나 proposal 생성 후 worktree가 변경되면 다음 단계로 진행하지 않는다.
+다른 profile은 job ID를 알아도 조회하거나 실행할 수 없다. Manual proposal 거절 시
+job은 `abandoned`가 되고 worktree와 branch가 정리된다.
+
+현재 API는 단계별 동기 호출이다. 개발 실행이나 테스트가 client timeout보다 길어질 수
+있는 프로젝트에는 후속 비동기 queue API가 필요하다.
+
 ```yaml
 version: 1
 tests:
