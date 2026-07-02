@@ -232,3 +232,13 @@ class WorktreeTestResult(BaseModel):
     policy_file: str
     results: list[TestCommandResult] = Field(default_factory=list)
     error: str | None = None
+
+
+class WorktreeProposalResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_id: str
+    ok: bool
+    proposal_id: str | None = None
+    proposal_sha256: str | None = None
+    changed_files: list[str] = Field(default_factory=list)
+    error: str | None = None

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shlex
 import sqlite3
 import subprocess
@@ -233,8 +234,27 @@ class ProposalStore:
         task: str,
         diff_text: str,
     ) -> dict[str, Any]:
+        return self.create_with_task_hash(
+            profile=profile,
+            cwd=cwd,
+            agent=agent,
+            task_hash=_sha256_bytes(task.encode()),
+            diff_text=diff_text,
+        )
+
+    def create_with_task_hash(
+        self,
+        *,
+        profile: str,
+        cwd: Path,
+        agent: AgentName,
+        task_hash: str,
+        diff_text: str,
+    ) -> dict[str, Any]:
         if not diff_text.strip():
             raise ArtifactError("cannot store an empty diff")
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", task_hash):
+            raise ArtifactError("invalid task hash")
         canonical_cwd = Path(os.path.realpath(cwd))
         diff_text = normalize_diff_text(diff_text, canonical_cwd)
         if len(diff_text) > self.max_diff_chars:
@@ -248,7 +268,7 @@ class ProposalStore:
             "profile": profile,
             "cwd": str(canonical_cwd),
             "agent": agent.value,
-            "task_hash": _sha256_bytes(task.encode()),
+            "task_hash": task_hash,
             "diff_sha256": diff_sha256,
             "diff_text": diff_text,
             "base_files_json": json.dumps(base_files, sort_keys=True),

@@ -117,6 +117,33 @@ def test_stores_immutable_proposal_with_base_hash(tmp_path):
             )
 
 
+def test_stores_proposal_with_existing_task_hash(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "app.py").write_text("old\n")
+    store = _store(tmp_path)
+    task_hash = "sha256:" + "a" * 64
+
+    proposal = store.create_with_task_hash(
+        profile="dev-bot",
+        cwd=workspace,
+        agent=AgentName.codex,
+        task_hash=task_hash,
+        diff_text=_diff(),
+    )
+
+    assert proposal["task_hash"] == task_hash
+
+    with pytest.raises(ArtifactError, match="invalid task hash"):
+        store.create_with_task_hash(
+            profile="dev-bot",
+            cwd=workspace,
+            agent=AgentName.codex,
+            task_hash="invalid",
+            diff_text=_diff(),
+        )
+
+
 def test_new_file_snapshot_is_none(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

@@ -133,6 +133,23 @@ class WorktreeManager:
                 );
                 CREATE INDEX IF NOT EXISTS worktree_test_runs_job_command
                     ON worktree_test_runs(job_id, command_index);
+                CREATE TABLE IF NOT EXISTS worktree_proposals (
+                    job_id TEXT PRIMARY KEY,
+                    proposal_id TEXT NOT NULL UNIQUE,
+                    proposal_sha256 TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(job_id) REFERENCES worktree_jobs(job_id)
+                );
+                CREATE TRIGGER IF NOT EXISTS worktree_proposals_no_update
+                    BEFORE UPDATE ON worktree_proposals
+                    BEGIN
+                        SELECT RAISE(ABORT, 'worktree proposal links are immutable');
+                    END;
+                CREATE TRIGGER IF NOT EXISTS worktree_proposals_no_delete
+                    BEFORE DELETE ON worktree_proposals
+                    BEGIN
+                        SELECT RAISE(ABORT, 'worktree proposal links cannot be deleted');
+                    END;
                 CREATE TRIGGER IF NOT EXISTS worktree_test_runs_no_update
                     BEFORE UPDATE ON worktree_test_runs
                     BEGIN
@@ -337,6 +354,52 @@ class WorktreeManager:
         if actual_branch != job.branch:
             raise WorktreeError("managed worktree branch does not match")
         return worktree
+
+    def mark_proposed(
+        self,
+        job_id: str,
+        *,
+        profile: str,
+        proposal_id: str,
+        proposal_sha256: str,
+    ) -> WorktreeJob:
+        current = self.get(job_id, profile=profile)
+        if current.status != WorktreeStatus.tested:
+            raise WorktreeError("worktree job is not ready for proposal creation")
+        try:
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute(
+                    """
+                    INSERT INTO worktree_proposals (
+                        job_id, proposal_id, proposal_sha256, created_at
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        job_id,
+                        proposal_id,
+                        proposal_sha256,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+                cursor = connection.execute(
+                    """
+                    UPDATE worktree_jobs
+                    SET status = ?
+                    WHERE job_id = ? AND profile = ? AND status = ?
+                    """,
+                    (
+                        WorktreeStatus.proposed.value,
+                        job_id,
+                        profile,
+                        WorktreeStatus.tested.value,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise WorktreeError("worktree proposal transition lost a race")
+        except sqlite3.IntegrityError as exc:
+            raise WorktreeError("worktree proposal link was rejected") from exc
+        return self.get(job_id, profile=profile)
 
     def get(self, job_id: str, *, profile: str) -> WorktreeJob:
         with self._connect() as connection:
