@@ -19,6 +19,24 @@ class RunMode(str, Enum):
     apply_patch = "apply_patch"
 
 
+class WorktreeStatus(str, Enum):
+    created = "created"
+    active = "active"
+    tested = "tested"
+    proposed = "proposed"
+    delivered = "delivered"
+    failed = "failed"
+    abandoned = "abandoned"
+
+
+class DeliveryMode(str, Enum):
+    manual = "manual"
+    auto = "auto"
+    commit = "commit"
+    pr = "pr"
+    report = "report"
+
+
 class ExecutionContext(BaseModel):
     """Per-call project preferences supplied by the invoking assistant."""
 
@@ -103,6 +121,14 @@ class ArtifactConfig(BaseModel):
     max_diff_chars: int = Field(default=1_000_000, ge=1_000, le=10_000_000)
 
 
+class WorktreeConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    root: Path = Path("~/.cache/host-coding-agent/worktrees")
+    state_path: Path = Path("artifacts/worktrees.db")
+    branch_prefix: str = Field(default="hca", pattern=r"^[A-Za-z0-9._-]+$")
+    ttl_sec: int = Field(default=86_400, ge=300, le=2_592_000)
+
+
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     server: ServerConfig
@@ -113,6 +139,7 @@ class AppConfig(BaseModel):
     profiles: dict[str, ProfileConfig] = Field(default_factory=dict)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     artifacts: ArtifactConfig = Field(default_factory=ArtifactConfig)
+    worktrees: WorktreeConfig = Field(default_factory=WorktreeConfig)
 
 
 class AttemptResult(BaseModel):
@@ -147,3 +174,18 @@ class RunResult(BaseModel):
     redacted: bool = False
     results: list[AttemptResult] = Field(default_factory=list)
     error: str | None = None
+
+
+class WorktreeJob(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_id: str
+    profile: str
+    repository: Path
+    worktree: Path
+    branch: str
+    base_commit: str
+    task_hash: str
+    delivery_mode: DeliveryMode
+    status: WorktreeStatus
+    created_at: str
+    expires_at: str

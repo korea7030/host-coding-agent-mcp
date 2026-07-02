@@ -166,3 +166,9 @@ artifacts:
   path: "artifacts/proposals.db"
   proposal_ttl_sec: 86400
   max_diff_chars: 1000000
+
+worktrees:
+  root: "~/.cache/host-coding-agent/worktrees"
+  state_path: "artifacts/worktrees.db"
+  branch_prefix: "hca"
+  ttl_sec: 86400

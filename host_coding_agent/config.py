@@ -38,6 +38,10 @@ def load_config(path: str | Path) -> AppConfig:
     config.security.denied_paths = [
         Path(os.path.realpath(Path(path).expanduser())) for path in config.security.denied_paths
     ]
+    worktree_root = config.worktrees.root.expanduser()
+    if not worktree_root.is_absolute():
+        raise ConfigError("worktrees.root must be absolute")
+    config.worktrees.root = Path(os.path.realpath(worktree_root))
     if not config.security.allowed_roots:
         raise ConfigError("at least one allowed root is required")
     if config.auth.enabled and not config.profiles:
