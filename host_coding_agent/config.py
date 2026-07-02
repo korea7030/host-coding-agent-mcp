@@ -48,8 +48,10 @@ def load_config(path: str | Path) -> AppConfig:
         profile.allowed_roots = [
             _canonical_directory(path) for path in profile.allowed_roots
         ]
-        if not profile.allowed_roots:
-            raise ConfigError(f"profile {name!r} requires at least one allowed root")
+        if not profile.allowed_roots and not profile.allowed_container_roots:
+            raise ConfigError(
+                f"profile {name!r} requires a host or container allowed root"
+            )
         for root in profile.allowed_roots:
             if not any(
                 root == global_root or root.is_relative_to(global_root)
@@ -63,31 +65,36 @@ def load_config(path: str | Path) -> AppConfig:
                 for denied in config.security.denied_paths
             ):
                 raise ConfigError(f"profile {name!r} root is denied: {root}")
-        seen_container_roots: set[Path] = set()
-        for mapping in profile.path_mappings:
-            container_root = mapping.container_root.expanduser()
+        normalized_container_roots: list[Path] = []
+        for container_root in profile.allowed_container_roots:
+            container_root = container_root.expanduser()
             if not container_root.is_absolute():
                 raise ConfigError(
-                    f"profile {name!r} container_root must be absolute"
+                    f"profile {name!r} allowed_container_root must be absolute"
                 )
             container_root = Path(os.path.normpath(container_root))
-            if container_root in seen_container_roots:
-                raise ConfigError(
-                    f"profile {name!r} has duplicate container_root: {container_root}"
-                )
-            seen_container_roots.add(container_root)
-            mapping.container_root = container_root
-            mapping.host_root = _canonical_directory(mapping.host_root)
-            if not any(
-                mapping.host_root == root or mapping.host_root.is_relative_to(root)
-                for root in profile.allowed_roots
-            ):
-                raise ConfigError(
-                    f"profile {name!r} mapped host_root is outside its allowed roots"
-                )
+            if container_root not in normalized_container_roots:
+                normalized_container_roots.append(container_root)
+        profile.allowed_container_roots = normalized_container_roots
+        if profile.allowed_container_roots and not profile.runtime_labels:
+            raise ConfigError(
+                f"profile {name!r} requires trusted runtime_labels"
+            )
         if profile.default_cwd is not None:
-            profile.default_cwd = _canonical_directory(profile.default_cwd)
-            if not any(
+            raw_default = profile.default_cwd.expanduser()
+            if not raw_default.is_absolute():
+                raise ConfigError(f"profile {name!r} default_cwd must be absolute")
+            normalized_default = Path(os.path.normpath(raw_default))
+            is_container_default = any(
+                normalized_default == root
+                or normalized_default.is_relative_to(root)
+                for root in profile.allowed_container_roots
+            )
+            if is_container_default:
+                profile.default_cwd = normalized_default
+            else:
+                profile.default_cwd = _canonical_directory(raw_default)
+            if not is_container_default and not any(
                 profile.default_cwd == root
                 or profile.default_cwd.is_relative_to(root)
                 for root in profile.allowed_roots
@@ -126,7 +133,10 @@ def validate_cwd(value: str | Path, config: AppConfig) -> Path:
 
 
 def validate_profile_cwd(
-    value: str | Path, profile_name: str, config: AppConfig
+    value: str | Path,
+    profile_name: str,
+    config: AppConfig,
+    runtime_registry=None,
 ) -> Path:
     profile = config.profiles.get(profile_name)
     if profile is None:
@@ -135,16 +145,17 @@ def validate_profile_cwd(
     if not raw.is_absolute():
         raise ConfigError("cwd must be an absolute path")
     normalized = Path(os.path.normpath(raw))
-    matches = [
-        mapping
-        for mapping in profile.path_mappings
-        if normalized == mapping.container_root
-        or normalized.is_relative_to(mapping.container_root)
-    ]
-    if matches:
-        mapping = max(matches, key=lambda item: len(item.container_root.parts))
-        relative = normalized.relative_to(mapping.container_root)
-        raw = mapping.host_root / relative
+    is_container_path = any(
+        normalized == root or normalized.is_relative_to(root)
+        for root in profile.allowed_container_roots
+    )
+    if is_container_path:
+        if runtime_registry is None:
+            raise ConfigError("Docker runtime resolver is unavailable")
+        raw = runtime_registry.resolve(
+            profile_name=profile_name,
+            container_path=normalized,
+        )
     resolved = validate_cwd(raw, config)
     if not any(
         resolved == root or resolved.is_relative_to(root)

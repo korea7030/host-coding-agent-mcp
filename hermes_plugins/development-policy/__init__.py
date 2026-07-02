@@ -7,10 +7,12 @@ from .policy import (
     on_pre_gateway_dispatch,
     on_pre_llm_call,
     on_pre_tool_call,
+    register_runtime,
 )
 
 
 def register(ctx) -> None:
+    register_runtime(force=True)
     ctx.register_hook("pre_llm_call", on_pre_llm_call)
     ctx.register_hook("pre_tool_call", on_pre_tool_call)
     ctx.register_hook("pre_gateway_dispatch", on_pre_gateway_dispatch)

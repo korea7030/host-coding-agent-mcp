@@ -27,8 +27,12 @@ authenticated `host-coding-agent` MCP server.
 The normal default is
 `run_coding_agent(agent="auto", mode="propose_patch", timeout_sec=900)`.
 Hermes passes its container workspace path as `cwd`; the MCP translates only
-the profile-scoped workspace alias to the corresponding host path. `/opt/data`
-as a whole is never mapped.
+the profile-scoped workspace root. The gateway registers its container ID
+outside the LLM tool loop, and the MCP derives the host path from Docker
+`Mounts[].Destination` and `Mounts[].Source`. `/opt/data` as a whole is never
+allowed. Docker labels bind the registered container identity to the
+authenticated profile. Existing profile-authorized host paths bypass container
+translation.
 
 ## Blocked native tools
 

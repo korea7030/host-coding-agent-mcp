@@ -6,6 +6,8 @@ import json
 import os
 import urllib.error
 import urllib.request
+import time
+from pathlib import Path
 from typing import Any
 
 ALLOWED_DEVELOPMENT_MCP_TOOLS = frozenset(
@@ -42,9 +44,44 @@ ROUTING_CONTEXT = """Development execution policy:
 _telegram_command_context: contextvars.ContextVar[tuple[str, str] | None] = (
     contextvars.ContextVar("development_policy_telegram_command", default=None)
 )
+_last_runtime_registration = 0.0
+
+
+def register_runtime(*, force: bool = False) -> None:
+    global _last_runtime_registration
+    if not Path("/.dockerenv").exists():
+        return
+    now = time.monotonic()
+    if not force and now - _last_runtime_registration < 20:
+        return
+    token = os.environ.get("MCP_HOST_CODING_AGENT_API_KEY", "")
+    if not token:
+        return
+    try:
+        container_id = Path("/etc/hostname").read_text().strip()
+        request = urllib.request.Request(
+            "http://host.docker.internal:8787/runtime/register",
+            data=json.dumps(
+                {"runtime": "docker", "container_id": container_id}
+            ).encode(),
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            result = json.loads(response.read())
+        if result.get("ok"):
+            _last_runtime_registration = now
+    except Exception:
+        # MCP execution will return an explicit registration error if this
+        # best-effort gateway registration could not complete.
+        return
 
 
 def on_pre_gateway_dispatch(event: Any = None, **_: Any) -> None:
+    register_runtime()
     text = str(getattr(event, "text", "") or "").strip()
     command = text.split(maxsplit=1)[0].split("@", 1)[0].casefold()
     source = getattr(event, "source", None)

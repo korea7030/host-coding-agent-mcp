@@ -23,6 +23,7 @@ from host_coding_agent.approvals import ApprovalError, ApprovalStore
 from host_coding_agent.applier import PatchApplier, PatchApplyError
 from host_coding_agent.artifacts import ArtifactError, ProposalStore
 from host_coding_agent.profiles import authenticated_profile, resolve_profile_request
+from host_coding_agent.runtime import RuntimeRegistry
 
 
 def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
@@ -38,6 +39,10 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         max_diff_chars=config.artifacts.max_diff_chars,
     )
     approval_store = ApprovalStore(artifact_path)
+    runtime_registry = RuntimeRegistry(
+        config,
+        state_path=artifact_path.with_name("runtimes.json"),
+    )
     patch_applier = PatchApplier(
         config=config,
         proposals=proposal_store,
@@ -68,6 +73,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                 agent=agent,
                 mode=mode,
                 context=context,
+                runtime_registry=runtime_registry,
             )
             result = execute_agent(
                 task=task,
@@ -127,6 +133,34 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         if not config.auth.enabled:
             return "anonymous"
         return authenticated_profile(get_access_token(), config)
+
+    @mcp.custom_route(
+        "/runtime/register",
+        methods=["POST"],
+        include_in_schema=False,
+    )
+    async def runtime_register(request: Request) -> JSONResponse:
+        authorization = request.headers.get("authorization", "")
+        scheme, _, raw_token = authorization.partition(" ")
+        if scheme.casefold() != "bearer" or not raw_token or auth is None:
+            return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+        token = await auth.verify_token(raw_token)
+        if token is None:
+            return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+        try:
+            payload = await request.json()
+            if payload.get("runtime") != "docker":
+                raise ConfigError("unsupported runtime registration")
+            registration = runtime_registry.register_docker(
+                profile_name=token.claims["profile"],
+                container_id=str(payload.get("container_id", "")),
+            )
+            return JSONResponse({"ok": True, **registration})
+        except (ConfigError, KeyError, TypeError, ValueError) as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)},
+                status_code=400,
+            )
 
     @mcp.custom_route(
         "/approval/telegram",

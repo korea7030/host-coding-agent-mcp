@@ -5,6 +5,7 @@ __pycache__/
 logs/*.jsonl
 artifacts/*.db
 artifacts/*.db-*
+artifacts/runtimes.json
 *.log
 .env
 .env.*

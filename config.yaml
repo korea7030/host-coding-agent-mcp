@@ -20,10 +20,6 @@ security:
     - "/Users/jaehyunlee/tmp"
     - "/Users/jaehyunlee/hermes-workspaces"
     - "/Users/jaehyunlee/coding"
-    - "/Users/jaehyunlee/.hermes-dev/profiles/dev-bot/workspace"
-    - "/Users/jaehyunlee/.hermes-invest/profiles/invest-bot/workspace"
-    - "/Users/jaehyunlee/.hermes-research/profiles/research-bot/workspace"
-    - "/Users/jaehyunlee/.hermes-youtube/profiles/youtube-bot/workspace"
   denied_paths:
     - "/Users/jaehyunlee/.ssh"
     - "/Users/jaehyunlee/.aws"
@@ -95,10 +91,10 @@ profiles:
       - "/Users/jaehyunlee/tmp"
       - "/Users/jaehyunlee/hermes-workspaces"
       - "/Users/jaehyunlee/coding"
-      - "/Users/jaehyunlee/.hermes-dev/profiles/dev-bot/workspace"
-    path_mappings:
-      - container_root: "/opt/data/profiles/dev-bot/workspace"
-        host_root: "/Users/jaehyunlee/.hermes-dev/profiles/dev-bot/workspace"
+    allowed_container_roots:
+      - "/opt/data/profiles/dev-bot/workspace"
+    runtime_labels:
+      com.docker.compose.service: "hermes-dev"
     approval_identities: ["telegram:7965486003"]
     allowed_agents:
       - "antigravity"
@@ -107,7 +103,7 @@ profiles:
     allowed_modes:
       - "read_only"
       - "propose_patch"
-    default_cwd: "/Users/jaehyunlee/projects"
+    default_cwd: "/opt/data/profiles/dev-bot/workspace"
     default_agent: "auto"
     default_mode: "propose_patch"
     context:
@@ -115,15 +111,15 @@ profiles:
       environment: "macOS host에서 실행되며 Docker의 Hermes dev-bot이 MCP로 호출"
   invest-bot:
     token_env: "HOST_CODING_AGENT_INVEST_BOT_TOKEN"
-    allowed_roots:
-      - "/Users/jaehyunlee/.hermes-invest/profiles/invest-bot/workspace"
-    path_mappings:
-      - container_root: "/opt/data/profiles/invest-bot/workspace"
-        host_root: "/Users/jaehyunlee/.hermes-invest/profiles/invest-bot/workspace"
+    allowed_roots: []
+    allowed_container_roots:
+      - "/opt/data/profiles/invest-bot/workspace"
+    runtime_labels:
+      com.docker.compose.service: "hermes-invest"
     approval_identities: ["telegram:7965486003"]
     allowed_agents: ["antigravity", "codex", "opencode"]
     allowed_modes: ["read_only", "propose_patch"]
-    default_cwd: "/Users/jaehyunlee/.hermes-invest/profiles/invest-bot/workspace"
+    default_cwd: "/opt/data/profiles/invest-bot/workspace"
     default_agent: "auto"
     default_mode: "propose_patch"
     context:
@@ -131,15 +127,15 @@ profiles:
       environment: "Hermes invest-bot 전용 workspace"
   research-bot:
     token_env: "HOST_CODING_AGENT_RESEARCH_BOT_TOKEN"
-    allowed_roots:
-      - "/Users/jaehyunlee/.hermes-research/profiles/research-bot/workspace"
-    path_mappings:
-      - container_root: "/opt/data/profiles/research-bot/workspace"
-        host_root: "/Users/jaehyunlee/.hermes-research/profiles/research-bot/workspace"
+    allowed_roots: []
+    allowed_container_roots:
+      - "/opt/data/profiles/research-bot/workspace"
+    runtime_labels:
+      com.docker.compose.service: "hermes-research"
     approval_identities: ["telegram:7965486003"]
     allowed_agents: ["antigravity", "codex", "opencode"]
     allowed_modes: ["read_only", "propose_patch"]
-    default_cwd: "/Users/jaehyunlee/.hermes-research/profiles/research-bot/workspace"
+    default_cwd: "/opt/data/profiles/research-bot/workspace"
     default_agent: "auto"
     default_mode: "propose_patch"
     context:
@@ -147,15 +143,15 @@ profiles:
       environment: "Hermes research-bot 전용 workspace"
   youtube-bot:
     token_env: "HOST_CODING_AGENT_YOUTUBE_BOT_TOKEN"
-    allowed_roots:
-      - "/Users/jaehyunlee/.hermes-youtube/profiles/youtube-bot/workspace"
-    path_mappings:
-      - container_root: "/opt/data/profiles/youtube-bot/workspace"
-        host_root: "/Users/jaehyunlee/.hermes-youtube/profiles/youtube-bot/workspace"
+    allowed_roots: []
+    allowed_container_roots:
+      - "/opt/data/profiles/youtube-bot/workspace"
+    runtime_labels:
+      com.docker.compose.service: "hermes-youtube"
     approval_identities: ["telegram:7965486003"]
     allowed_agents: ["antigravity", "codex", "opencode"]
     allowed_modes: ["read_only", "propose_patch"]
-    default_cwd: "/Users/jaehyunlee/.hermes-youtube/profiles/youtube-bot/workspace"
+    default_cwd: "/opt/data/profiles/youtube-bot/workspace"
     default_agent: "auto"
     default_mode: "propose_patch"
     context:

@@ -56,6 +56,7 @@ def resolve_profile_request(
     agent: AgentName | None,
     mode: RunMode | None,
     context: ExecutionContext | None,
+    runtime_registry=None,
 ) -> ResolvedRequest:
     profile_name = authenticated_profile(access_token, config)
     if not config.auth.enabled:
@@ -79,7 +80,12 @@ def resolve_profile_request(
     if resolved_mode not in profile.allowed_modes:
         raise SecurityViolation("mode is not allowed for this profile")
 
-    resolved_cwd = validate_profile_cwd(resolved_cwd_value, profile_name, config)
+    resolved_cwd = validate_profile_cwd(
+        resolved_cwd_value,
+        profile_name,
+        config,
+        runtime_registry=runtime_registry,
+    )
     return ResolvedRequest(
         profile_name=profile_name,
         profile=profile,

@@ -38,19 +38,12 @@ class AuthConfig(BaseModel):
     required_scope: str = "host-coding-agent"
 
 
-class PathMapping(BaseModel):
-    """A profile-scoped container path alias for a host workspace."""
-
-    model_config = ConfigDict(extra="forbid")
-    container_root: Path
-    host_root: Path
-
-
 class ProfileConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     token_env: str = Field(min_length=1, max_length=200)
-    allowed_roots: list[Path]
-    path_mappings: list[PathMapping] = Field(default_factory=list)
+    allowed_roots: list[Path] = Field(default_factory=list)
+    allowed_container_roots: list[Path] = Field(default_factory=list)
+    runtime_labels: dict[str, str] = Field(default_factory=dict)
     approval_identities: list[str] = Field(default_factory=list)
     allowed_agents: list[AgentName] = Field(
         default_factory=lambda: [AgentName.codex, AgentName.opencode]

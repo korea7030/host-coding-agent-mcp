@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from fastmcp.server.auth import AccessToken
 
@@ -5,7 +7,6 @@ from host_coding_agent.auth import ProfileTokenVerifier, build_auth_provider
 from host_coding_agent.models import (
     AgentName,
     ExecutionContext,
-    PathMapping,
     ProfileConfig,
     RunMode,
 )
@@ -147,12 +148,15 @@ def test_profile_rejects_cwd_outside_profile_root(config, tmp_path):
 
 def test_profile_maps_container_workspace_to_host(config):
     root = _enable_profile(config)
-    container_root = "/opt/data/profiles/dev-bot/workspace"
-    config.profiles["dev-bot"].path_mappings = [
-        PathMapping(container_root=container_root, host_root=root)
-    ]
+    container_root = Path("/opt/data/profiles/dev-bot/workspace")
+    config.profiles["dev-bot"].allowed_container_roots = [container_root]
     child = root / "repo"
     child.mkdir()
+
+    class FakeRuntimeRegistry:
+        def resolve(self, *, profile_name, container_path):
+            assert profile_name == "dev-bot"
+            return root / Path(container_path).relative_to(container_root)
 
     resolved = resolve_profile_request(
         access_token=_access_token(),
@@ -162,6 +166,7 @@ def test_profile_maps_container_workspace_to_host(config):
         agent=None,
         mode=None,
         context=None,
+        runtime_registry=FakeRuntimeRegistry(),
     )
 
     assert resolved.cwd == str(child)
@@ -169,6 +174,9 @@ def test_profile_maps_container_workspace_to_host(config):
 
 def test_profile_does_not_map_entire_container_data_root(config):
     _enable_profile(config)
+    config.profiles["dev-bot"].allowed_container_roots = [
+        Path("/opt/data/profiles/dev-bot/workspace")
+    ]
 
     with pytest.raises(ValueError, match="existing directory|not allowed"):
         resolve_profile_request(

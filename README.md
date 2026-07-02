@@ -222,13 +222,13 @@ profiles:
     token_env: HOST_CODING_AGENT_DEV_BOT_TOKEN
     allowed_roots:
       - /Users/jaehyunlee/projects
-      - /Users/jaehyunlee/.hermes-dev/profiles/dev-bot/workspace
-    path_mappings:
-      - container_root: /opt/data/profiles/dev-bot/workspace
-        host_root: /Users/jaehyunlee/.hermes-dev/profiles/dev-bot/workspace
+    allowed_container_roots:
+      - /opt/data/profiles/dev-bot/workspace
+    runtime_labels:
+      com.docker.compose.service: hermes-dev
     allowed_agents: [antigravity, codex, opencode]
     allowed_modes: [read_only, propose_patch]
-    default_cwd: /Users/jaehyunlee/projects
+    default_cwd: /opt/data/profiles/dev-bot/workspace
     default_agent: auto
     default_mode: propose_patch
     context:
@@ -242,13 +242,19 @@ profiles:
 적용되는 상한선이다. profile 추가 시 고유한 `token_env`를 지정하고 해당 환경변수에는
 최소 32자 이상의 고유 token을 설정한다.
 
-`path_mappings`는 Docker 내부 workspace 경로를 host 경로로 변환한다. 매핑은
-인증된 profile에만 적용되고 `host_root`는 해당 profile의 `allowed_roots` 내부여야
-한다. `/opt/data` 전체를 매핑하지 말고 profile workspace만 지정한다. Hermes의
-`mcp_servers.host-coding-agent.timeout`은 장기 agent 실행을 고려해 900초로 설정한다.
+`allowed_roots`는 host에서 직접 전달할 수 있는 경로이고,
+`allowed_container_roots`는 container 내부에서 허용할 workspace 경로다. Hermes
+gateway plugin은 LLM 호출 전에 `/etc/hostname`의 container ID를 host에 등록한다.
+Host MCP는 `docker inspect`의 bind mount 목록에서 가장 긴 `Destination` prefix를
+선택하고 `Source`를 조합해 실제 host 경로를 계산한다. `/opt/data` 전체는 허용하지
+않는다. Hermes의 `mcp_servers.host-coding-agent.timeout`은 장기 agent 실행을
+고려해 900초로 설정한다.
+`runtime_labels`는 인증 profile이 다른 container ID를 등록하지 못하도록 Docker
+metadata를 검증한다. 인증된 registration은 `artifacts/runtimes.json`에 `0600`으로
+저장되며 MCP 재시작 시 container 실행 상태·label·mount를 다시 inspect한 후 복원한다.
 실행 결과의 `cwd`는 변환된 macOS host 경로이며 정상 동작이다. 입력값은
-`requested_cwd`, 변환 여부는 `path_mapping_applied`로 함께 반환한다. 매핑은 Docker
-mount를 추측하지 않고 profile 설정의 명시적 `container_root`/`host_root`를 사용한다.
+`requested_cwd`, 변환 여부는 `path_mapping_applied`로 함께 반환한다. 전달된 경로가
+허용된 host 경로로 존재하면 변환하지 않고 직접 사용한다.
 
 `approval_identities`에는 해당 profile의 proposal을 승인할 수 있는 외부 identity만
 등록한다. 예: `telegram:7965486003`. 일반 MCP agent profile의 `allowed_modes`에는
@@ -270,5 +276,6 @@ Telegram 승인 명령:
 - Origin/Host 검증과 동시 실행 제한은 아직 구현하지 않았다.
 - timeout은 process group을 종료하지만 스스로 새 session으로 daemonize한 하위 프로세스까지 완전하게 회수하지는 못한다. 장기 작업 queue 전에 별도 worker 격리가 필요하다.
 - 비동기 queue와 job id는 후속 단계다.
+- Docker container 호출은 host의 Docker Engine과 `docker inspect` 권한이 필요하다.
 - 동기 호출 결과가 매우 크면 Hermes/Codex 자체 응답 제한에 걸릴 수 있으므로 작업을
   작은 범위로 분리해야 한다. 근본 해결은 비동기 job queue와 paginated result다.
