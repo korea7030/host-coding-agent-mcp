@@ -22,7 +22,7 @@ def test_extracts_codex_agent_message():
 
 
 def test_extracts_fenced_diff():
-    assert _extract_diff("x\n```diff\n--- a/a\n+++ b/a\n```\n") == "--- a/a\n+++ b/a"
+    assert _extract_diff("x\n```diff\n--- a/a\n+++ b/a\n```\n") == "--- a/a\n+++ b/a\n"
 
 
 def test_opencode_readonly_policy_enables_omo_delegation_but_denies_mutation_and_shell():

@@ -240,7 +240,7 @@ def _run_attempt(
 
 def _extract_diff(text: str) -> str:
     fenced = re.search(r"```diff\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
-    return fenced.group(1).strip() if fenced else ""
+    return fenced.group(1).strip() + "\n" if fenced else ""
 
 
 def _agent_text(attempt: AttemptResult) -> str:

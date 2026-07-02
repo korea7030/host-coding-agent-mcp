@@ -58,6 +58,7 @@ def _run_git_apply(
         command.append("--check")
     if reverse:
         command.append("--reverse")
+    command.append("--recount")
     command.extend(["--whitespace=error-all", "-"])
     try:
         return subprocess.run(

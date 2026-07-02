@@ -272,6 +272,9 @@ Telegram 승인 명령:
 승인 적용 시 profile/token/Telegram user/hash/만료/Git HEAD/base file/path/symlink를
 재검증하고 `git apply --check` 후 적용한다. 승인 상태와 이벤트는 SQLite에 기록되며
 재사용할 수 없다.
+Proposal 저장 전에는 unified diff의 마지막 newline과 whitespace-only 추가 줄을
+정규화하고, workspace 내부 절대 header를 상대경로로 바꾼 뒤
+`git apply --check --recount`를 통과해야만 proposal ID를 발급한다.
 
 ## 알려진 제한
 

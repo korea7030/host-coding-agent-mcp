@@ -18,6 +18,75 @@ class ArtifactError(ValueError):
     pass
 
 
+def _format_diff_path(path: str) -> str:
+    return json.dumps(path) if any(char.isspace() for char in path) else path
+
+
+def normalize_diff_text(diff_text: str, cwd: Path | None = None) -> str:
+    """Normalize transport damage without changing non-blank source lines."""
+    normalized_lines = []
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git "):
+            fields = shlex.split(line)
+            if len(fields) != 4:
+                raise ArtifactError(f"invalid diff header: {line}")
+            old_path = _normalize_diff_path(fields[2], cwd)
+            new_path = _normalize_diff_path(fields[3], cwd)
+            if old_path is None or new_path is None:
+                raise ArtifactError(f"invalid diff header: {line}")
+            normalized_lines.append(
+                "diff --git "
+                f"{_format_diff_path('a/' + old_path)} "
+                f"{_format_diff_path('b/' + new_path)}"
+            )
+        elif line.startswith(("--- ", "+++ ")):
+            prefix = line[:3]
+            value = line[4:].split("\t", 1)[0]
+            path = _normalize_diff_path(value, cwd)
+            if path is None:
+                normalized_lines.append(f"{prefix} /dev/null")
+            else:
+                side = "a/" if prefix == "---" else "b/"
+                normalized_lines.append(
+                    f"{prefix} {_format_diff_path(side + path)}"
+                )
+        elif (
+            line.startswith("+")
+            and not line.startswith("+++")
+            and not line[1:].strip()
+        ):
+            normalized_lines.append("+")
+        else:
+            normalized_lines.append(line)
+    return "\n".join(normalized_lines) + "\n" if normalized_lines else ""
+
+
+def validate_patch_preflight(cwd: Path, diff_text: str) -> None:
+    try:
+        completed = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(cwd),
+                "apply",
+                "--check",
+                "--recount",
+                "--whitespace=error-all",
+                "-",
+            ],
+            input=diff_text,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ArtifactError(f"proposal preflight could not run: {exc}") from exc
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise ArtifactError(f"proposal failed git apply preflight: {detail[:1000]}")
+
+
 def _sha256_bytes(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
@@ -166,10 +235,12 @@ class ProposalStore:
     ) -> dict[str, Any]:
         if not diff_text.strip():
             raise ArtifactError("cannot store an empty diff")
+        canonical_cwd = Path(os.path.realpath(cwd))
+        diff_text = normalize_diff_text(diff_text, canonical_cwd)
         if len(diff_text) > self.max_diff_chars:
             raise ArtifactError("diff exceeds configured artifact size limit")
-        canonical_cwd = Path(os.path.realpath(cwd))
         base_files = snapshot_base_files(canonical_cwd, diff_text)
+        validate_patch_preflight(canonical_cwd, diff_text)
         diff_sha256 = _sha256_bytes(diff_text.encode())
         now = datetime.now(timezone.utc)
         record = {

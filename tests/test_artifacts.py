@@ -10,6 +10,7 @@ from host_coding_agent.artifacts import (
     ArtifactError,
     ProposalStore,
     extract_diff_paths,
+    normalize_diff_text,
 )
 from host_coding_agent.models import AgentName
 
@@ -35,6 +36,48 @@ def _diff(path: str = "app.py", old: str = "old", new: str = "new") -> str:
 
 def test_extracts_and_normalizes_unified_diff_paths():
     assert extract_diff_paths(_diff("src/app.py")) == ["src/app.py"]
+
+
+def test_normalizes_transport_newline_and_whitespace_only_added_lines():
+    raw = (
+        "--- /dev/null\n"
+        "+++ blank.py\n"
+        "@@ -0,0 +1,3 @@\n"
+        "+first\n"
+        "+    \n"
+        "+last"
+    )
+
+    assert normalize_diff_text(raw) == (
+        "--- /dev/null\n"
+        "+++ b/blank.py\n"
+        "@@ -0,0 +1,3 @@\n"
+        "+first\n"
+        "+\n"
+        "+last\n"
+    )
+
+
+def test_recounts_incorrect_hunk_line_count_before_storing(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = _store(tmp_path)
+    diff = (
+        "--- /dev/null\n"
+        "+++ count.py\n"
+        "@@ -0,0 +1,99 @@\n"
+        "+print('ok')"
+    )
+
+    proposal = store.create(
+        profile="dev-bot",
+        cwd=workspace,
+        agent=AgentName.codex,
+        task="add script",
+        diff_text=diff,
+    )
+
+    assert proposal["diff_text"].endswith("\n")
 
 
 def test_stores_immutable_proposal_with_base_hash(tmp_path):
@@ -79,12 +122,20 @@ def test_new_file_snapshot_is_none(tmp_path):
     workspace.mkdir()
     store = _store(tmp_path)
 
+    diff = (
+        "diff --git a/new.py b/new.py\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        "+++ b/new.py\n"
+        "@@ -0,0 +1 @@\n"
+        "+print('new')\n"
+    )
     proposal = store.create(
         profile="dev-bot",
         cwd=workspace,
         agent=AgentName.opencode,
         task="add file",
-        diff_text=_diff("new.py", old="", new="print('new')"),
+        diff_text=diff,
     )
 
     assert proposal["base_files"] == {"new.py": None}
