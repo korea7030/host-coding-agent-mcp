@@ -53,7 +53,8 @@ the Hermes containers.
 ## Approval boundary
 
 The coding agents remain read-only. Patch application is performed only by the
-external Telegram `/apply-proposal` gateway command. The host endpoint:
+external Telegram `/apply_proposal` gateway command. Internally Hermes maps the
+Telegram-compatible underscore to the plugin command `apply-proposal`. The host endpoint:
 
 - authenticates the profile bearer token and Telegram user allowlist;
 - binds approval to profile, user, workspace, proposal hash, and expiry;

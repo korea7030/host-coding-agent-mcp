@@ -20,6 +20,6 @@ path. Coding agents remain read-only until a separate human approval is
 verified. When MCP returns a `proposal_id`, report both `proposal_id` and
 `proposal_sha256` to the user. The user can inspect it with
 `/proposal <proposal_id>`, approve and apply it with
-`/apply-proposal <proposal_id> <proposal_sha256>`, or reject it with
+`/apply_proposal <proposal_id> <proposal_sha256>`, or reject it with
 `/reject <proposal_id> <proposal_sha256>`. Do not claim that the patch was
-applied unless `/apply-proposal` returns an applied status.
+applied unless `/apply_proposal` returns an applied status.

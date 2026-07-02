@@ -264,7 +264,7 @@ metadata를 검증한다. 인증된 registration은 `artifacts/runtimes.json`에
 Telegram 승인 명령:
 
 - `/proposal <proposal_id>`: immutable diff와 hash 검토
-- `/apply-proposal <proposal_id> <proposal_sha256>`: 승인, 재검증, patch 적용
+- `/apply_proposal <proposal_id> <proposal_sha256>`: 승인, 재검증, patch 적용
 - `/reject <proposal_id> <proposal_sha256>`: 거절
 
 승인 적용 시 profile/token/Telegram user/hash/만료/Git HEAD/base file/path/symlink를

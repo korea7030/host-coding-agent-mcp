@@ -39,7 +39,7 @@ ROUTING_CONTEXT = """Development execution policy:
 - If host-coding-agent MCP fails, report the failure. Do not fall back to a native development tool.
 - Coding agents are read-only and may only return findings or a proposed diff until a separate human approval is verified.
 - When a proposal_id is returned, show the proposal_id and proposal_sha256 to the user.
-- Only the external Telegram /apply-proposal command may apply a proposal. Do not claim that a patch was applied unless that command returns status=applied."""
+- Only the external Telegram /apply_proposal command may apply a proposal. Do not claim that a patch was applied unless that command returns status=applied."""
 
 _telegram_command_context: contextvars.ContextVar[tuple[str, str] | None] = (
     contextvars.ContextVar("development_policy_telegram_command", default=None)
@@ -83,7 +83,12 @@ def register_runtime(*, force: bool = False) -> None:
 def on_pre_gateway_dispatch(event: Any = None, **_: Any) -> None:
     register_runtime()
     text = str(getattr(event, "text", "") or "").strip()
-    command = text.split(maxsplit=1)[0].split("@", 1)[0].casefold()
+    command = (
+        text.split(maxsplit=1)[0]
+        .split("@", 1)[0]
+        .casefold()
+        .replace("_", "-")
+    )
     source = getattr(event, "source", None)
     platform = getattr(getattr(source, "platform", None), "value", None)
     user_id = getattr(source, "user_id", None)
@@ -110,7 +115,8 @@ def _approval_request(action: str, raw_args: str) -> dict[str, Any]:
     required = 1 if action == "show" else 2
     if len(parts) != required:
         suffix = " <proposal_sha256>" if required == 2 else ""
-        raise ValueError(f"Usage: /{expected_command} <proposal_id>{suffix}")
+        telegram_command = expected_command.replace("-", "_")
+        raise ValueError(f"Usage: /{telegram_command} <proposal_id>{suffix}")
     payload = {
         "action": action,
         "proposal_id": parts[0],

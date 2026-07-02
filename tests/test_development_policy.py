@@ -93,7 +93,7 @@ def test_plugin_registers_hooks_and_approval_commands():
 
 def test_gateway_hook_captures_telegram_identity_for_approval(monkeypatch):
     event = SimpleNamespace(
-        text="/apply-proposal proposal-id sha256:value",
+        text="/apply_proposal proposal-id sha256:value",
         source=SimpleNamespace(
             platform=SimpleNamespace(value="telegram"),
             user_id="123",
