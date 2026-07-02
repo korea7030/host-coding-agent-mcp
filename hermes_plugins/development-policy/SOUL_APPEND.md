@@ -7,7 +7,10 @@ Default to `run_coding_agent(agent="auto", mode="propose_patch",
 timeout_sec=900)`. Pass the current container workspace path as `cwd`
 (`/opt/data/profiles/<profile>/workspace` or a child); the MCP maps it to the
 authenticated host workspace. Do not pass `/opt/data` itself. Split broad
-repository analysis into narrowly scoped calls to limit result size. Use
+repository analysis into narrowly scoped calls to limit result size. The
+returned `cwd` is the resolved macOS host path by design; verify
+`requested_cwd` and `path_mapping_applied` instead of treating `/Users/...` as
+an error. Use
 `run_opencode` with `ultrawork` for OMO orchestration when explicitly requested.
 
 Never use Hermes `terminal`, `execute_code`, `write_file`, `patch`,

@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from host_coding_agent.models import AgentName, AttemptResult, ExecutionContext, RunMode
 from host_coding_agent.runner import (
@@ -38,6 +39,7 @@ def test_prompt_includes_assistant_and_structured_execution_context():
     prompt = _prompt(
         "implement the endpoint",
         RunMode.propose_patch,
+        Path("/tmp/workspace"),
         assistant_id="frontend-bot",
         context=ExecutionContext(
             language="한국어",
@@ -53,6 +55,7 @@ def test_prompt_includes_assistant_and_structured_execution_context():
     assert '"language": "한국어"' in prompt
     assert '"runtime": "node"' in prompt
     assert '"test_command": "pnpm test"' in prompt
+    assert "Resolved host working directory: /tmp/workspace" in prompt
 
 
 def test_run_result_echoes_context_and_audit_only_stores_context_hash(

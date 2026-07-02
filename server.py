@@ -80,6 +80,11 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                 context=resolved.context,
                 allowed_agents=set(resolved.profile.allowed_agents),
             )
+            result.requested_cwd = cwd or str(resolved.profile.default_cwd)
+            result.path_mapping_applied = (
+                result.requested_cwd is not None
+                and Path(result.requested_cwd) != result.cwd
+            )
             profile_name = resolved.profile_name
         else:
             if cwd is None:
@@ -94,6 +99,8 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                 assistant_id=assistant_id,
                 context=context,
             )
+            result.requested_cwd = cwd
+            result.path_mapping_applied = False
             profile_name = assistant_id or "anonymous"
         if (
             result.ok

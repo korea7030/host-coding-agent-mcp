@@ -31,6 +31,7 @@ ROUTING_CONTEXT = """Development execution policy:
 - All code analysis, generation, modification, testing, refactoring, and deployment preparation for host projects MUST use the host-coding-agent MCP tools.
 - Default to mcp_host_coding_agent_run_coding_agent with agent="auto", mode="propose_patch", and timeout_sec=900.
 - Pass the current container workspace path as cwd (normally /opt/data/profiles/<profile>/workspace or a child). The MCP maps that authenticated profile path to its host workspace. Do not pass /opt/data itself.
+- The result cwd is the resolved macOS host path by design. Use requested_cwd and path_mapping_applied to verify the translation; do not treat a /Users/... result cwd as a mapping failure.
 - Keep each request narrowly scoped. Split large project analysis into multiple calls to avoid oversized tool results.
 - Never use terminal, execute_code, write_file, patch, delegate_task, or a directly launched coding-agent CLI for development.
 - If host-coding-agent MCP fails, report the failure. Do not fall back to a native development tool.

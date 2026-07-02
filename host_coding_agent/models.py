@@ -141,6 +141,8 @@ class RunResult(BaseModel):
     assistant_id: str | None = None
     context: ExecutionContext | None = None
     cwd: Path
+    requested_cwd: str | None = None
+    path_mapping_applied: bool = False
     mode: RunMode
     stdout: str = ""
     stderr: str = ""

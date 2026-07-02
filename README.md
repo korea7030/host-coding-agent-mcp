@@ -246,6 +246,9 @@ profiles:
 인증된 profile에만 적용되고 `host_root`는 해당 profile의 `allowed_roots` 내부여야
 한다. `/opt/data` 전체를 매핑하지 말고 profile workspace만 지정한다. Hermes의
 `mcp_servers.host-coding-agent.timeout`은 장기 agent 실행을 고려해 900초로 설정한다.
+실행 결과의 `cwd`는 변환된 macOS host 경로이며 정상 동작이다. 입력값은
+`requested_cwd`, 변환 여부는 `path_mapping_applied`로 함께 반환한다. 매핑은 Docker
+mount를 추측하지 않고 profile 설정의 명시적 `container_root`/`host_root`를 사용한다.
 
 `approval_identities`에는 해당 profile의 proposal을 승인할 수 있는 외부 identity만
 등록한다. 예: `telegram:7965486003`. 일반 MCP agent profile의 `allowed_modes`에는

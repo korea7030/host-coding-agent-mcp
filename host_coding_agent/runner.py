@@ -79,6 +79,7 @@ def check_agents(config: AppConfig) -> dict:
 def _prompt(
     task: str,
     mode: RunMode,
+    cwd: Path,
     assistant_id: str | None = None,
     context: ExecutionContext | None = None,
 ) -> str:
@@ -92,6 +93,11 @@ def _prompt(
     else:
         policy = "Apply only the requested changes, then report changed files and test results."
     sections = [policy]
+    sections.append(
+        "Resolved host working directory: "
+        f"{cwd}\nUse this current working directory and relative paths only. "
+        "Do not access or reconstruct the caller's Docker /opt/data path."
+    )
     if assistant_id:
         sections.append(f"Invoking assistant: {assistant_id}")
     if context:
@@ -133,7 +139,7 @@ def _build_command(
     executable = _resolve_command(agent_config.command)
     if not executable:
         raise FileNotFoundError(agent_config.command)
-    prompt = _prompt(task, mode, assistant_id, context)
+    prompt = _prompt(task, mode, cwd, assistant_id, context)
     if agent == AgentName.codex:
         sandbox = "workspace-write" if mode == RunMode.apply_patch else "read-only"
         command = [
@@ -365,6 +371,14 @@ def run_coding_agent(
         ),
         "duration_sec": round(time.monotonic() - started, 3),
         "ok": result.ok,
-        "attempts": [{"agent": item.agent.value, "returncode": item.returncode} for item in attempts],
+        "attempts": [
+            {
+                "agent": item.agent.value,
+                "returncode": item.returncode,
+                "timed_out": item.timed_out,
+                "stderr_preview": item.stderr[:1000],
+            }
+            for item in attempts
+        ],
     })
     return result
