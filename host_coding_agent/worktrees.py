@@ -17,6 +17,36 @@ class WorktreeError(ValueError):
     pass
 
 
+_TERMINAL_STATUSES = {
+    WorktreeStatus.delivered,
+    WorktreeStatus.failed,
+    WorktreeStatus.abandoned,
+}
+
+_STATUS_TRANSITIONS = {
+    WorktreeStatus.created: {
+        WorktreeStatus.active,
+        WorktreeStatus.failed,
+        WorktreeStatus.abandoned,
+    },
+    WorktreeStatus.active: {
+        WorktreeStatus.tested,
+        WorktreeStatus.failed,
+        WorktreeStatus.abandoned,
+    },
+    WorktreeStatus.tested: {
+        WorktreeStatus.proposed,
+        WorktreeStatus.failed,
+        WorktreeStatus.abandoned,
+    },
+    WorktreeStatus.proposed: {
+        WorktreeStatus.delivered,
+        WorktreeStatus.failed,
+        WorktreeStatus.abandoned,
+    },
+}
+
+
 def _run_git(arguments: list[str], *, timeout: int = 30) -> str:
     try:
         completed = subprocess.run(
@@ -81,6 +111,11 @@ class WorktreeManager:
                 );
                 CREATE INDEX IF NOT EXISTS worktree_jobs_profile_created
                     ON worktree_jobs(profile, created_at DESC);
+                CREATE TABLE IF NOT EXISTS repository_locks (
+                    repository TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL UNIQUE,
+                    acquired_at TEXT NOT NULL
+                );
                 CREATE TRIGGER IF NOT EXISTS worktree_jobs_identity_immutable
                     BEFORE UPDATE ON worktree_jobs
                     WHEN NEW.job_id IS NOT OLD.job_id
@@ -101,6 +136,25 @@ class WorktreeManager:
                     BEGIN
                         SELECT RAISE(ABORT, 'worktree job records cannot be deleted');
                     END;
+                CREATE TRIGGER IF NOT EXISTS worktree_jobs_valid_transition
+                    BEFORE UPDATE OF status ON worktree_jobs
+                    WHEN NOT (
+                        (OLD.status = 'created' AND NEW.status IN (
+                            'active', 'failed', 'abandoned'
+                        ))
+                        OR (OLD.status = 'active' AND NEW.status IN (
+                            'tested', 'failed', 'abandoned'
+                        ))
+                        OR (OLD.status = 'tested' AND NEW.status IN (
+                            'proposed', 'failed', 'abandoned'
+                        ))
+                        OR (OLD.status = 'proposed' AND NEW.status IN (
+                            'delivered', 'failed', 'abandoned'
+                        ))
+                    )
+                    BEGIN
+                        SELECT RAISE(ABORT, 'invalid worktree status transition');
+                    END;
                 """
             )
         os.chmod(self.state_path, 0o600)
@@ -117,6 +171,9 @@ class WorktreeManager:
         repository_root = Path(
             _run_git(["-C", str(requested), "rev-parse", "--show-toplevel"])
         )
+        self._validate_repository_state(repository_root)
+        if self.root == repository_root or self.root.is_relative_to(repository_root):
+            raise WorktreeError("managed worktree root must be outside the repository")
         base_commit = _run_git(
             ["-C", str(repository_root), "rev-parse", "HEAD"]
         )
@@ -127,18 +184,6 @@ class WorktreeManager:
         worktree = self.root / job_id
         if worktree.exists():
             raise WorktreeError("managed worktree path already exists")
-        _run_git(
-            [
-                "-C",
-                str(repository_root),
-                "worktree",
-                "add",
-                "-b",
-                branch,
-                str(worktree),
-                base_commit,
-            ]
-        )
         now = datetime.now(timezone.utc)
         record = {
             "job_id": job_id,
@@ -157,6 +202,32 @@ class WorktreeManager:
             with self._connect() as connection:
                 connection.execute(
                     """
+                    INSERT INTO repository_locks (
+                        repository, job_id, acquired_at
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (str(repository_root), job_id, now.isoformat()),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise WorktreeError(
+                "repository already has an active worktree job"
+            ) from exc
+        try:
+            _run_git(
+                [
+                    "-C",
+                    str(repository_root),
+                    "worktree",
+                    "add",
+                    "-b",
+                    branch,
+                    str(worktree),
+                    base_commit,
+                ]
+            )
+            with self._connect() as connection:
+                connection.execute(
+                    """
                     INSERT INTO worktree_jobs (
                         job_id, profile, repository, worktree, branch,
                         base_commit, task_hash, delivery_mode, status,
@@ -169,19 +240,54 @@ class WorktreeManager:
                     """,
                     record,
                 )
-        except sqlite3.Error as exc:
-            _run_git(
-                [
-                    "-C",
-                    str(repository_root),
-                    "worktree",
-                    "remove",
-                    "--force",
-                    str(worktree),
-                ]
+        except (sqlite3.Error, WorktreeError) as exc:
+            self._rollback_creation(
+                repository=repository_root,
+                worktree=worktree,
+                branch=branch,
+                job_id=job_id,
             )
+            if isinstance(exc, WorktreeError):
+                raise
             raise WorktreeError("could not persist worktree job") from exc
         return WorktreeJob.model_validate(record)
+
+    def transition(
+        self,
+        job_id: str,
+        *,
+        profile: str,
+        status: WorktreeStatus,
+    ) -> WorktreeJob:
+        current = self.get(job_id, profile=profile)
+        if status not in _STATUS_TRANSITIONS.get(current.status, set()):
+            raise WorktreeError(
+                f"invalid worktree status transition: {current.status.value} -> {status.value}"
+            )
+        try:
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                cursor = connection.execute(
+                    """
+                    UPDATE worktree_jobs
+                    SET status = ?
+                    WHERE job_id = ? AND profile = ? AND status = ?
+                    """,
+                    (status.value, job_id, profile, current.status.value),
+                )
+                if cursor.rowcount != 1:
+                    raise WorktreeError("worktree status transition lost a race")
+                if status in _TERMINAL_STATUSES:
+                    connection.execute(
+                        """
+                        DELETE FROM repository_locks
+                        WHERE repository = ? AND job_id = ?
+                        """,
+                        (str(current.repository), job_id),
+                    )
+        except sqlite3.IntegrityError as exc:
+            raise WorktreeError("worktree status transition was rejected") from exc
+        return self.get(job_id, profile=profile)
 
     def get(self, job_id: str, *, profile: str) -> WorktreeJob:
         with self._connect() as connection:
@@ -209,3 +315,66 @@ class WorktreeManager:
                 (profile, safe_limit),
             ).fetchall()
         return [WorktreeJob.model_validate(dict(row)) for row in rows]
+
+    def _validate_repository_state(self, repository: Path) -> None:
+        status = _run_git(
+            [
+                "-C",
+                str(repository),
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+            ]
+        )
+        if status:
+            raise WorktreeError("repository has uncommitted or untracked changes")
+        in_progress_paths = (
+            "MERGE_HEAD",
+            "CHERRY_PICK_HEAD",
+            "REVERT_HEAD",
+            "BISECT_LOG",
+            "rebase-apply",
+            "rebase-merge",
+        )
+        for marker in in_progress_paths:
+            git_path = Path(
+                _run_git(
+                    ["-C", str(repository), "rev-parse", "--git-path", marker]
+                )
+            )
+            if not git_path.is_absolute():
+                git_path = repository / git_path
+            if git_path.exists():
+                raise WorktreeError(f"repository operation is in progress: {marker}")
+
+    def _rollback_creation(
+        self,
+        *,
+        repository: Path,
+        worktree: Path,
+        branch: str,
+        job_id: str,
+    ) -> None:
+        if worktree.exists():
+            try:
+                _run_git(
+                    [
+                        "-C",
+                        str(repository),
+                        "worktree",
+                        "remove",
+                        "--force",
+                        str(worktree),
+                    ]
+                )
+            except WorktreeError:
+                pass
+        try:
+            _run_git(["-C", str(repository), "branch", "-D", branch])
+        except WorktreeError:
+            pass
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM repository_locks WHERE job_id = ?",
+                (job_id,),
+            )

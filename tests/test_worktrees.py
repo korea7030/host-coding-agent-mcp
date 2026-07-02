@@ -117,3 +117,93 @@ def test_database_rejects_identity_mutation_and_delete(tmp_path):
                 "DELETE FROM worktree_jobs WHERE job_id = ?",
                 (job.job_id,),
             )
+
+
+@pytest.mark.parametrize("filename", ["tracked.txt", "untracked.txt"])
+def test_rejects_dirty_repository(tmp_path, filename):
+    repository = _repository(tmp_path)
+    if filename == "tracked.txt":
+        target = repository / "app.py"
+    else:
+        target = repository / filename
+    target.write_text("dirty\n")
+    manager = _manager(tmp_path)
+
+    with pytest.raises(WorktreeError, match="uncommitted or untracked"):
+        manager.create(
+            repository=repository,
+            profile="dev-bot",
+            task="change app",
+        )
+
+
+def test_rejects_repository_operation_in_progress(tmp_path):
+    repository = _repository(tmp_path)
+    git_dir = subprocess.run(
+        ["git", "-C", str(repository), "rev-parse", "--git-dir"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    (repository / git_dir / "MERGE_HEAD").write_text("0" * 40 + "\n")
+    manager = _manager(tmp_path)
+
+    with pytest.raises(WorktreeError, match="MERGE_HEAD"):
+        manager.create(
+            repository=repository,
+            profile="dev-bot",
+            task="change app",
+        )
+
+
+def test_repository_lock_blocks_concurrent_job_until_terminal_status(tmp_path):
+    repository = _repository(tmp_path)
+    manager = _manager(tmp_path)
+    first = manager.create(
+        repository=repository,
+        profile="dev-bot",
+        task="first task",
+    )
+
+    with pytest.raises(WorktreeError, match="active worktree job"):
+        manager.create(
+            repository=repository,
+            profile="dev-bot",
+            task="second task",
+        )
+
+    active = manager.transition(
+        first.job_id,
+        profile="dev-bot",
+        status=WorktreeStatus.active,
+    )
+    failed = manager.transition(
+        active.job_id,
+        profile="dev-bot",
+        status=WorktreeStatus.failed,
+    )
+    assert failed.status == WorktreeStatus.failed
+
+    second = manager.create(
+        repository=repository,
+        profile="dev-bot",
+        task="second task",
+    )
+    assert second.job_id != first.job_id
+
+
+def test_rejects_invalid_status_transition(tmp_path):
+    repository = _repository(tmp_path)
+    manager = _manager(tmp_path)
+    job = manager.create(
+        repository=repository,
+        profile="dev-bot",
+        task="change app",
+    )
+
+    with pytest.raises(WorktreeError, match="invalid worktree status"):
+        manager.transition(
+            job.job_id,
+            profile="dev-bot",
+            status=WorktreeStatus.tested,
+        )
