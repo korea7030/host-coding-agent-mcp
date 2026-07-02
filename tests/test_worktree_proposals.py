@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from host_coding_agent.approvals import ApprovalStore
 from host_coding_agent.artifacts import ProposalStore
 from host_coding_agent.models import AgentName, WorktreeStatus
 from host_coding_agent.proposals import create_managed_worktree_proposal
@@ -50,6 +51,10 @@ def _store(tmp_path: Path) -> ProposalStore:
     )
 
 
+def _approvals(store: ProposalStore) -> ApprovalStore:
+    return ApprovalStore(store.path)
+
+
 def _tested_job(manager: WorktreeManager, repository: Path):
     job = manager.create(
         repository=repository,
@@ -80,6 +85,7 @@ def test_creates_immutable_proposal_from_tested_worktree(tmp_path):
     result = create_managed_worktree_proposal(
         manager=manager,
         proposals=store,
+        approvals=_approvals(store),
         job_id=job.job_id,
         profile="dev-bot",
         agent=AgentName.opencode,
@@ -97,6 +103,10 @@ def test_creates_immutable_proposal_from_tested_worktree(tmp_path):
     assert proposal["task_hash"] == job.task_hash
     assert proposal["git_head"] == job.base_commit
     assert proposal["base_files"]["new.py"] is None
+    assert _approvals(store).get_for_proposal(
+        result.proposal_id,
+        profile="dev-bot",
+    )["status"] == "pending"
     assert (repository / "app.py").read_text() == "original\n"
     assert not (repository / "new.py").exists()
 
@@ -129,6 +139,7 @@ def test_includes_untracked_binary_file(tmp_path):
     result = create_managed_worktree_proposal(
         manager=manager,
         proposals=store,
+        approvals=_approvals(store),
         job_id=job.job_id,
         profile="dev-bot",
         agent=AgentName.codex,
@@ -149,6 +160,7 @@ def test_empty_worktree_fails_job_and_releases_lock(tmp_path):
     result = create_managed_worktree_proposal(
         manager=manager,
         proposals=store,
+        approvals=_approvals(store),
         job_id=job.job_id,
         profile="dev-bot",
         agent=AgentName.codex,
@@ -178,6 +190,7 @@ def test_changed_delivery_target_fails_closed(tmp_path):
     result = create_managed_worktree_proposal(
         manager=manager,
         proposals=store,
+        approvals=_approvals(store),
         job_id=job.job_id,
         profile="dev-bot",
         agent=AgentName.codex,

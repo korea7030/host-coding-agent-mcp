@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from .approvals import ApprovalError, ApprovalStore
 from .artifacts import ArtifactError, ProposalStore, extract_diff_paths
 from .models import AgentName, WorktreeProposalResult, WorktreeStatus
 from .worktrees import WorktreeError, WorktreeManager
@@ -86,6 +87,7 @@ def create_managed_worktree_proposal(
     *,
     manager: WorktreeManager,
     proposals: ProposalStore,
+    approvals: ApprovalStore,
     job_id: str,
     profile: str,
     agent: AgentName,
@@ -105,13 +107,19 @@ def create_managed_worktree_proposal(
             task_hash=job.task_hash,
             diff_text=diff_text,
         )
+        approvals.create_pending(proposal)
         manager.mark_proposed(
             job_id,
             profile=profile,
             proposal_id=proposal["proposal_id"],
             proposal_sha256=proposal["diff_sha256"],
         )
-    except (ArtifactError, WorktreeError, WorktreeProposalError) as exc:
+    except (
+        ApprovalError,
+        ArtifactError,
+        WorktreeError,
+        WorktreeProposalError,
+    ) as exc:
         current = manager.get(job_id, profile=profile)
         if current.status == WorktreeStatus.tested:
             manager.transition(

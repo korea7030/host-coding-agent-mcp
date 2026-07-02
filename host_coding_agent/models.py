@@ -242,3 +242,12 @@ class WorktreeProposalResult(BaseModel):
     proposal_sha256: str | None = None
     changed_files: list[str] = Field(default_factory=list)
     error: str | None = None
+
+
+class WorktreeCleanupResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_id: str
+    ok: bool
+    worktree_removed: bool = False
+    branch_removed: bool = False
+    error: str | None = None

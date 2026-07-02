@@ -10,7 +10,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from .models import DeliveryMode, WorktreeJob, WorktreeStatus
+from .models import (
+    DeliveryMode,
+    WorktreeCleanupResult,
+    WorktreeJob,
+    WorktreeStatus,
+)
 
 
 class WorktreeError(ValueError):
@@ -149,6 +154,28 @@ class WorktreeManager:
                     BEFORE DELETE ON worktree_proposals
                     BEGIN
                         SELECT RAISE(ABORT, 'worktree proposal links cannot be deleted');
+                    END;
+                CREATE TABLE IF NOT EXISTS worktree_cleanup_runs (
+                    cleanup_id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL,
+                    ok INTEGER NOT NULL,
+                    worktree_removed INTEGER NOT NULL,
+                    branch_removed INTEGER NOT NULL,
+                    error TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(job_id) REFERENCES worktree_jobs(job_id)
+                );
+                CREATE INDEX IF NOT EXISTS worktree_cleanup_runs_job_created
+                    ON worktree_cleanup_runs(job_id, created_at);
+                CREATE TRIGGER IF NOT EXISTS worktree_cleanup_runs_no_update
+                    BEFORE UPDATE ON worktree_cleanup_runs
+                    BEGIN
+                        SELECT RAISE(ABORT, 'worktree cleanup runs are immutable');
+                    END;
+                CREATE TRIGGER IF NOT EXISTS worktree_cleanup_runs_no_delete
+                    BEFORE DELETE ON worktree_cleanup_runs
+                    BEGIN
+                        SELECT RAISE(ABORT, 'worktree cleanup runs cannot be deleted');
                     END;
                 CREATE TRIGGER IF NOT EXISTS worktree_test_runs_no_update
                     BEFORE UPDATE ON worktree_test_runs
@@ -400,6 +427,125 @@ class WorktreeManager:
         except sqlite3.IntegrityError as exc:
             raise WorktreeError("worktree proposal link was rejected") from exc
         return self.get(job_id, profile=profile)
+
+    def find_by_proposal(
+        self,
+        proposal_id: str,
+        *,
+        profile: str,
+    ) -> tuple[WorktreeJob, dict[str, str]] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT j.*, p.proposal_id, p.proposal_sha256
+                FROM worktree_jobs AS j
+                JOIN worktree_proposals AS p ON p.job_id = j.job_id
+                WHERE p.proposal_id = ? AND j.profile = ?
+                """,
+                (proposal_id, profile),
+            ).fetchone()
+        if row is None:
+            return None
+        record = dict(row)
+        link = {
+            "proposal_id": record.pop("proposal_id"),
+            "proposal_sha256": record.pop("proposal_sha256"),
+        }
+        return WorktreeJob.model_validate(record), link
+
+    def cleanup(
+        self,
+        job_id: str,
+        *,
+        profile: str,
+    ) -> WorktreeCleanupResult:
+        job = self.get(job_id, profile=profile)
+        if job.status not in _TERMINAL_STATUSES:
+            raise WorktreeError("only terminal worktree jobs can be cleaned up")
+        worktree = Path(os.path.realpath(job.worktree))
+        if worktree == self.root or not worktree.is_relative_to(self.root):
+            raise WorktreeError("worktree path escaped the managed root")
+        worktree_removed = not worktree.exists()
+        branch_removed = False
+        error: str | None = None
+        try:
+            if not worktree_removed:
+                _run_git(
+                    [
+                        "-C",
+                        str(job.repository),
+                        "worktree",
+                        "remove",
+                        "--force",
+                        str(worktree),
+                    ]
+                )
+                worktree_removed = not worktree.exists()
+                if not worktree_removed:
+                    raise WorktreeError("managed worktree directory still exists")
+            else:
+                _run_git(
+                    ["-C", str(job.repository), "worktree", "prune"]
+                )
+            branches = set(
+                _run_git(
+                    [
+                        "-C",
+                        str(job.repository),
+                        "for-each-ref",
+                        "--format=%(refname:short)",
+                        "refs/heads",
+                    ]
+                ).splitlines()
+            )
+            if job.branch in branches:
+                _run_git(
+                    ["-C", str(job.repository), "branch", "-D", job.branch]
+                )
+            branch_removed = job.branch not in set(
+                _run_git(
+                    [
+                        "-C",
+                        str(job.repository),
+                        "for-each-ref",
+                        "--format=%(refname:short)",
+                        "refs/heads",
+                    ]
+                ).splitlines()
+            )
+            if not branch_removed:
+                raise WorktreeError("managed worktree branch still exists")
+        except WorktreeError as exc:
+            error = str(exc)
+        result = WorktreeCleanupResult(
+            job_id=job_id,
+            ok=worktree_removed and branch_removed and error is None,
+            worktree_removed=worktree_removed,
+            branch_removed=branch_removed,
+            error=error,
+        )
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO worktree_cleanup_runs (
+                        cleanup_id, job_id, ok, worktree_removed,
+                        branch_removed, error, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        uuid.uuid4().hex,
+                        job_id,
+                        result.ok,
+                        result.worktree_removed,
+                        result.branch_removed,
+                        result.error,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+        except sqlite3.Error as exc:
+            raise WorktreeError("could not persist worktree cleanup result") from exc
+        return result
 
     def get(self, job_id: str, *, profile: str) -> WorktreeJob:
         with self._connect() as connection:

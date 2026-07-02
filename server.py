@@ -22,8 +22,10 @@ from host_coding_agent.auth import build_auth_provider
 from host_coding_agent.approvals import ApprovalError, ApprovalStore
 from host_coding_agent.applier import PatchApplier, PatchApplyError
 from host_coding_agent.artifacts import ArtifactError, ProposalStore
+from host_coding_agent.delivery import ManualDelivery, ManualDeliveryError
 from host_coding_agent.profiles import authenticated_profile, resolve_profile_request
 from host_coding_agent.runtime import RuntimeRegistry
+from host_coding_agent.worktrees import WorktreeError, WorktreeManager
 
 
 def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
@@ -47,6 +49,19 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         config=config,
         proposals=proposal_store,
         approvals=approval_store,
+    )
+    worktree_state_path = config.worktrees.state_path
+    if not worktree_state_path.is_absolute():
+        worktree_state_path = resolved_config_path.parent / worktree_state_path
+    worktree_manager = WorktreeManager(
+        root=config.worktrees.root,
+        state_path=worktree_state_path,
+        branch_prefix=config.worktrees.branch_prefix,
+        ttl_sec=config.worktrees.ttl_sec,
+    )
+    manual_delivery = ManualDelivery(
+        manager=worktree_manager,
+        applier=patch_applier,
     )
     mcp = FastMCP(
         "host-coding-agent",
@@ -213,14 +228,36 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                 )
                 return JSONResponse({"ok": True, "approval": approval})
             if action == "approve":
-                approval_store.decide(
+                approval = approval_store.get_for_proposal(
+                    proposal_id,
+                    profile=profile_name,
+                )
+                if approval["status"] == "pending":
+                    approval = approval_store.decide(
+                        proposal_id=proposal_id,
+                        profile=profile_name,
+                        proposal_sha256=proposal_sha256,
+                        approved=True,
+                        decided_by=actor,
+                        decision_channel="telegram",
+                    )
+                elif approval["status"] not in {"approved", "applied"}:
+                    raise ApprovalError(
+                        f"approval cannot be applied from status {approval['status']}"
+                    )
+                if manual_delivery.applies_to(
                     proposal_id=proposal_id,
                     profile=profile_name,
-                    proposal_sha256=proposal_sha256,
-                    approved=True,
-                    decided_by=actor,
-                    decision_channel="telegram",
-                )
+                ):
+                    return JSONResponse(
+                        manual_delivery.deliver(
+                            proposal_id=proposal_id,
+                            profile=profile_name,
+                            proposal_sha256=proposal_sha256,
+                        )
+                    )
+                if approval["status"] != "approved":
+                    raise ApprovalError("approved request not found")
                 return JSONResponse(
                     patch_applier.apply(
                         proposal_id=proposal_id,
@@ -235,7 +272,9 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         except (
             ApprovalError,
             ArtifactError,
+            ManualDeliveryError,
             PatchApplyError,
+            WorktreeError,
             KeyError,
             TypeError,
             ValueError,
