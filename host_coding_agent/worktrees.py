@@ -116,6 +116,33 @@ class WorktreeManager:
                     job_id TEXT NOT NULL UNIQUE,
                     acquired_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS worktree_test_runs (
+                    run_id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL,
+                    command_index INTEGER NOT NULL,
+                    command_json TEXT NOT NULL,
+                    ok INTEGER NOT NULL,
+                    returncode INTEGER,
+                    stdout TEXT NOT NULL,
+                    stderr TEXT NOT NULL,
+                    duration_sec REAL NOT NULL,
+                    timed_out INTEGER NOT NULL,
+                    redacted INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(job_id) REFERENCES worktree_jobs(job_id)
+                );
+                CREATE INDEX IF NOT EXISTS worktree_test_runs_job_command
+                    ON worktree_test_runs(job_id, command_index);
+                CREATE TRIGGER IF NOT EXISTS worktree_test_runs_no_update
+                    BEFORE UPDATE ON worktree_test_runs
+                    BEGIN
+                        SELECT RAISE(ABORT, 'worktree test runs are immutable');
+                    END;
+                CREATE TRIGGER IF NOT EXISTS worktree_test_runs_no_delete
+                    BEFORE DELETE ON worktree_test_runs
+                    BEGIN
+                        SELECT RAISE(ABORT, 'worktree test runs cannot be deleted');
+                    END;
                 CREATE TRIGGER IF NOT EXISTS worktree_jobs_identity_immutable
                     BEFORE UPDATE ON worktree_jobs
                     WHEN NEW.job_id IS NOT OLD.job_id

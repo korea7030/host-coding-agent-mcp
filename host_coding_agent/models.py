@@ -127,6 +127,13 @@ class WorktreeConfig(BaseModel):
     state_path: Path = Path("artifacts/worktrees.db")
     branch_prefix: str = Field(default="hca", pattern=r"^[A-Za-z0-9._-]+$")
     ttl_sec: int = Field(default=86_400, ge=300, le=2_592_000)
+    policy_file: str = Field(
+        default=".host-coding-agent.yaml",
+        pattern=r"^[A-Za-z0-9._-]+$",
+    )
+    require_tests: bool = True
+    max_test_timeout_sec: int = Field(default=900, ge=1, le=3600)
+    max_test_output_chars: int = Field(default=100_000, ge=1_000, le=1_000_000)
 
 
 class AppConfig(BaseModel):
@@ -189,3 +196,39 @@ class WorktreeJob(BaseModel):
     status: WorktreeStatus
     created_at: str
     expires_at: str
+
+
+class ProjectTestConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    commands: list[list[str]] = Field(min_length=1, max_length=50)
+    timeout_sec: int = Field(default=300, ge=1, le=3600)
+
+
+class ProjectPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: int = Field(default=1, ge=1, le=1)
+    tests: ProjectTestConfig
+
+
+class TestCommandResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: str
+    command_index: int
+    command: list[str]
+    ok: bool
+    returncode: int | None = None
+    stdout: str = ""
+    stderr: str = ""
+    duration_sec: float = 0.0
+    timed_out: bool = False
+    redacted: bool = False
+
+
+class WorktreeTestResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_id: str
+    ok: bool
+    policy_commit: str
+    policy_file: str
+    results: list[TestCommandResult] = Field(default_factory=list)
+    error: str | None = None

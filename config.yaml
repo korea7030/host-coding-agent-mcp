@@ -172,3 +172,7 @@ worktrees:
   state_path: "artifacts/worktrees.db"
   branch_prefix: "hca"
   ttl_sec: 86400
+  policy_file: ".host-coding-agent.yaml"
+  require_tests: true
+  max_test_timeout_sec: 900
+  max_test_output_chars: 100000
