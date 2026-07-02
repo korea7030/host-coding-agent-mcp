@@ -8,11 +8,14 @@ import yaml
 from fastmcp.server.auth import AccessToken
 
 import server
+from host_coding_agent.approvals import ApprovalStore
 from host_coding_agent.models import (
     AgentName,
     DeliveryMode,
     ProfileConfig,
     RunMode,
+    RunResult,
+    WorktreeStatus,
 )
 from host_coding_agent.worktrees import WorktreeManager
 
@@ -53,6 +56,118 @@ def _repository(root: Path) -> Path:
         check=True,
     )
     return repository
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("delivery_mode", "expected_stage"),
+    [
+        ("manual", "awaiting_approval"),
+        ("commit", "delivered"),
+    ],
+)
+async def test_single_call_development_workflow(
+    config,
+    monkeypatch,
+    tmp_path: Path,
+    delivery_mode: str,
+    expected_stage: str,
+):
+    repository = _repository(config.security.allowed_roots[0])
+    config.auth.enabled = True
+    config.profiles["dev-bot"] = ProfileConfig(
+        token_env="TEST_DEV_TOKEN",
+        allowed_roots=[repository],
+        allowed_agents=[AgentName.codex],
+        allowed_modes=[RunMode.propose_patch],
+        allowed_delivery_modes=[DeliveryMode.manual, DeliveryMode.commit],
+        default_cwd=repository,
+        default_agent=AgentName.codex,
+    )
+    monkeypatch.setenv("TEST_DEV_TOKEN", "d" * 32)
+    config.artifacts.path = tmp_path / "artifacts" / "proposals.db"
+    config.worktrees.root = tmp_path / "worktrees"
+    config.worktrees.state_path = tmp_path / "artifacts" / "worktrees.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(config.model_dump(mode="json"), sort_keys=False)
+    )
+    monkeypatch.setattr(
+        server,
+        "get_access_token",
+        lambda: _access_token(),
+    )
+
+    def fake_agent_run(**kwargs):
+        manager = kwargs["manager"]
+        job = manager.get(kwargs["job_id"], profile=kwargs["profile"])
+        manager.transition(
+            job.job_id,
+            profile=job.profile,
+            status=WorktreeStatus.active,
+        )
+        (job.worktree / "app.py").write_text("single call\n")
+        manager.record_selected_agent(
+            job.job_id,
+            profile=job.profile,
+            agent=AgentName.codex,
+        )
+        return RunResult(
+            ok=True,
+            selected_agent=AgentName.codex,
+            assistant_id=job.profile,
+            cwd=job.worktree,
+            requested_cwd=str(job.repository),
+            path_mapping_applied=True,
+            mode=RunMode.apply_patch,
+        )
+
+    monkeypatch.setattr(server, "run_managed_worktree_agent", fake_agent_run)
+    mcp, _ = server.create_server(config_path)
+
+    result = await mcp.call_tool(
+        "run_development_task",
+        {
+            "task": "change app",
+            "agent": "codex",
+            "delivery_mode": delivery_mode,
+        },
+    )
+    data = result.structured_content
+
+    assert data["ok"]
+    assert data["stage"] == expected_stage
+    assert data["selected_agent"] == "codex"
+    assert data["proposal_sha256"].startswith("sha256:")
+    assert (repository / "app.py").read_text() == "original\n"
+    manager = WorktreeManager(
+        root=config.worktrees.root,
+        state_path=config.worktrees.state_path,
+    )
+    job = manager.get(data["job_id"], profile="dev-bot")
+    if delivery_mode == "manual":
+        assert job.status == WorktreeStatus.proposed
+        assert job.worktree.exists()
+        approval = ApprovalStore(config.artifacts.path).get_for_proposal(
+            data["proposal_id"],
+            profile="dev-bot",
+        )
+        assert approval["status"] == "pending"
+    else:
+        assert job.status == WorktreeStatus.delivered
+        assert not job.worktree.exists()
+        assert subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repository),
+                "show",
+                f"{data['branch']}:app.py",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout == "single call\n"
 
 
 @pytest.mark.asyncio

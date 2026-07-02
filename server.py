@@ -203,6 +203,51 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
             payload["proposal"] = None
         return payload
 
+    def create_managed_job(
+        *,
+        task: str,
+        cwd: str | None,
+        delivery_mode: DeliveryMode,
+        assistant_id: str | None,
+    ):
+        profile_name, profile = development_profile(assistant_id)
+        if delivery_mode not in profile.allowed_delivery_modes:
+            raise SecurityViolation(
+                "delivery mode is not allowed for this profile"
+            )
+        if delivery_mode == DeliveryMode.report:
+            raise SecurityViolation("report delivery mode is not implemented")
+        validate_task(task)
+        requested_cwd = cwd or (
+            str(profile.default_cwd)
+            if profile.default_cwd is not None
+            else None
+        )
+        if requested_cwd is None:
+            raise ConfigError(
+                "cwd is required because this profile has no default_cwd"
+            )
+        repository = validate_profile_cwd(
+            requested_cwd,
+            profile_name,
+            config,
+            runtime_registry=runtime_registry,
+        )
+        repository = worktree_manager.repository_root(repository)
+        validate_profile_cwd(
+            repository,
+            profile_name,
+            config,
+            runtime_registry=runtime_registry,
+        )
+        job = worktree_manager.create(
+            repository=repository,
+            profile=profile_name,
+            task=task,
+            delivery_mode=delivery_mode,
+        )
+        return profile_name, profile, job
+
     @mcp.custom_route(
         "/runtime/register",
         methods=["POST"],
@@ -399,45 +444,162 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
     ) -> dict:
         """Create an isolated Git worktree job for the authenticated profile."""
         try:
-            profile_name, profile = development_profile(assistant_id)
-            if delivery_mode not in profile.allowed_delivery_modes:
-                raise SecurityViolation(
-                    "delivery mode is not allowed for this profile"
-                )
-            if delivery_mode == DeliveryMode.report:
-                raise SecurityViolation("report delivery mode is not implemented")
-            validate_task(task)
-            requested_cwd = cwd or (
-                str(profile.default_cwd)
-                if profile.default_cwd is not None
-                else None
-            )
-            if requested_cwd is None:
-                raise ConfigError(
-                    "cwd is required because this profile has no default_cwd"
-                )
-            repository = validate_profile_cwd(
-                requested_cwd,
-                profile_name,
-                config,
-                runtime_registry=runtime_registry,
-            )
-            repository = worktree_manager.repository_root(repository)
-            validate_profile_cwd(
-                repository,
-                profile_name,
-                config,
-                runtime_registry=runtime_registry,
-            )
-            job = worktree_manager.create(
-                repository=repository,
-                profile=profile_name,
+            _, _, job = create_managed_job(
                 task=task,
+                cwd=cwd,
                 delivery_mode=delivery_mode,
+                assistant_id=assistant_id,
             )
             return {"ok": True, "job": development_job_payload(job)}
         except (ConfigError, SecurityViolation, WorktreeError, ValueError) as exc:
             return {"ok": False, "error": str(exc)}
+
+    @mcp.tool
+    def run_development_task(
+        task: str,
+        cwd: str | None = None,
+        agent: AgentName | None = None,
+        delivery_mode: DeliveryMode = DeliveryMode.manual,
+        timeout_sec: int = 900,
+        assistant_id: str | None = None,
+        context: ExecutionContext | None = None,
+    ) -> dict:
+        """Run the complete isolated development workflow in one MCP call."""
+        stage = "create"
+        job = None
+        try:
+            profile_name, profile, job = create_managed_job(
+                task=task,
+                cwd=cwd,
+                delivery_mode=delivery_mode,
+                assistant_id=assistant_id,
+            )
+            selected_agent = agent or profile.default_agent
+            if (
+                selected_agent != AgentName.auto
+                and selected_agent not in profile.allowed_agents
+            ):
+                raise SecurityViolation("agent is not allowed for this profile")
+            stage = "agent"
+            run_result = run_managed_worktree_agent(
+                manager=worktree_manager,
+                job_id=job.job_id,
+                profile=profile_name,
+                task=task,
+                agent=selected_agent,
+                timeout_sec=timeout_sec,
+                config=config,
+                assistant_id=profile_name,
+                context=merge_context(profile.context, context),
+                allowed_agents=set(profile.allowed_agents),
+            )
+            if not run_result.ok:
+                return {
+                    "ok": False,
+                    "stage": stage,
+                    "job_id": job.job_id,
+                    "status": WorktreeStatus.failed.value,
+                    "error": run_result.error,
+                }
+            if run_result.selected_agent is None:
+                raise WorktreeError("coding agent result did not identify an agent")
+            stage = "test"
+            test_result = run_managed_worktree_tests(
+                manager=worktree_manager,
+                job_id=job.job_id,
+                profile=profile_name,
+                config=config.worktrees,
+            )
+            if not test_result.ok:
+                return {
+                    "ok": False,
+                    "stage": stage,
+                    "job_id": job.job_id,
+                    "status": WorktreeStatus.failed.value,
+                    "error": test_result.error,
+                    "failed_command": (
+                        test_result.results[-1].command
+                        if test_result.results
+                        else None
+                    ),
+                }
+            stage = "proposal"
+            proposal_result = create_managed_worktree_proposal(
+                manager=worktree_manager,
+                proposals=proposal_store,
+                approvals=approval_store,
+                job_id=job.job_id,
+                profile=profile_name,
+                agent=run_result.selected_agent,
+            )
+            if not proposal_result.ok:
+                return {
+                    "ok": False,
+                    "stage": stage,
+                    "job_id": job.job_id,
+                    "status": WorktreeStatus.failed.value,
+                    "error": proposal_result.error,
+                }
+            if delivery_mode == DeliveryMode.manual:
+                return {
+                    "ok": True,
+                    "stage": "awaiting_approval",
+                    "job_id": job.job_id,
+                    "status": WorktreeStatus.proposed.value,
+                    "selected_agent": run_result.selected_agent.value,
+                    "proposal_id": proposal_result.proposal_id,
+                    "proposal_sha256": proposal_result.proposal_sha256,
+                    "changed_files": proposal_result.changed_files,
+                    "requires_approval": True,
+                }
+            stage = "delivery"
+            delivery_result = automated_delivery.deliver(
+                job_id=job.job_id,
+                profile=profile_name,
+            )
+            return {
+                **delivery_result,
+                "stage": "delivered",
+                "status": WorktreeStatus.delivered.value,
+                "selected_agent": run_result.selected_agent.value,
+                "proposal_id": proposal_result.proposal_id,
+                "proposal_sha256": proposal_result.proposal_sha256,
+                "changed_files": proposal_result.changed_files,
+                "test_commands": len(test_result.results),
+            }
+        except (
+            ApprovalError,
+            ArtifactError,
+            AutomatedDeliveryError,
+            ConfigError,
+            SecurityViolation,
+            WorktreeError,
+            WorktreeProposalError,
+            WorktreeTestError,
+            ValueError,
+        ) as exc:
+            response = {"ok": False, "stage": stage, "error": str(exc)}
+            if job is not None:
+                response["job_id"] = job.job_id
+                try:
+                    current = worktree_manager.get(
+                        job.job_id,
+                        profile=job.profile,
+                    )
+                    if current.status not in {
+                        WorktreeStatus.delivered,
+                        WorktreeStatus.failed,
+                        WorktreeStatus.abandoned,
+                    }:
+                        current = worktree_manager.transition(
+                            job.job_id,
+                            profile=job.profile,
+                            status=WorktreeStatus.failed,
+                        )
+                    response["status"] = current.status.value
+                except WorktreeError:
+                    pass
+            return response
 
     @mcp.tool
     def run_development_job(
