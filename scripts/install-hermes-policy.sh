@@ -7,13 +7,18 @@ CONTAINER=${1:-hermes-dev}
 PROFILE=${2:-dev-bot}
 PROFILE_HOME="/opt/data/profiles/$PROFILE"
 DEST_DIR="$PROFILE_HOME/plugins/development-policy"
+GATEWAY_HOME="/opt/data"
+GATEWAY_DEST_DIR="$GATEWAY_HOME/plugins/development-policy"
 
-docker exec --user hermes "$CONTAINER" mkdir -p "$DEST_DIR"
+docker exec --user hermes "$CONTAINER" mkdir -p "$DEST_DIR" "$GATEWAY_DEST_DIR"
 docker cp "$SOURCE_DIR/." "$CONTAINER:$DEST_DIR/"
-docker exec --user root "$CONTAINER" chown -R hermes:hermes "$DEST_DIR"
+docker cp "$SOURCE_DIR/." "$CONTAINER:$GATEWAY_DEST_DIR/"
+docker exec --user root "$CONTAINER" chown -R hermes:hermes "$DEST_DIR" "$GATEWAY_DEST_DIR"
 
 docker exec --user hermes "$CONTAINER" sh -lc \
   "HERMES_HOME=$PROFILE_HOME HOME=/opt/data /opt/hermes/.venv/bin/hermes plugins enable development-policy"
+docker exec --user hermes "$CONTAINER" sh -lc \
+  "HERMES_HOME=$GATEWAY_HOME HOME=/opt/data /opt/hermes/.venv/bin/hermes plugins enable development-policy"
 
 docker exec -i --user hermes "$CONTAINER" sh -lc \
   "HERMES_HOME=$PROFILE_HOME HOME=/opt/data /opt/hermes/.venv/bin/python - '$PROFILE_HOME/SOUL.md' '$DEST_DIR/SOUL_APPEND.md'" <<'PY'
@@ -36,4 +41,5 @@ soul_path.write_text(updated)
 PY
 
 echo "Installed development-policy in $CONTAINER/$PROFILE"
+echo "Installed gateway command plugin in $CONTAINER:$GATEWAY_HOME"
 echo "Restart the profile gateway to load the plugin."
