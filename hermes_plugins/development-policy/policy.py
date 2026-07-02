@@ -172,21 +172,30 @@ def _format_approval_result(result: dict[str, Any]) -> str:
 
 
 async def handle_proposal(raw_args: str) -> str:
-    return _format_approval_result(
-        await asyncio.to_thread(_approval_request, "show", raw_args)
-    )
+    try:
+        return _format_approval_result(
+            await asyncio.to_thread(_approval_request, "show", raw_args)
+        )
+    except Exception as exc:
+        return f"Proposal command failed: {exc}"
 
 
 async def handle_approve(raw_args: str) -> str:
-    return _format_approval_result(
-        await asyncio.to_thread(_approval_request, "approve", raw_args)
-    )
+    try:
+        return _format_approval_result(
+            await asyncio.to_thread(_approval_request, "approve", raw_args)
+        )
+    except Exception as exc:
+        return f"Apply proposal command failed: {exc}"
 
 
 async def handle_reject(raw_args: str) -> str:
-    return _format_approval_result(
-        await asyncio.to_thread(_approval_request, "reject", raw_args)
-    )
+    try:
+        return _format_approval_result(
+            await asyncio.to_thread(_approval_request, "reject", raw_args)
+        )
+    except Exception as exc:
+        return f"Reject proposal command failed: {exc}"
 
 
 def normalize_tool_name(tool_name: str) -> str:

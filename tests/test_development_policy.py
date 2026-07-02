@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 import sys
 from types import SimpleNamespace
+import asyncio
 
 PLUGIN_DIR = (
     Path(__file__).resolve().parents[1]
@@ -127,3 +128,12 @@ def test_gateway_hook_captures_telegram_identity_for_approval(monkeypatch):
     assert result["ok"]
     assert b'"telegram_user_id": "123"' in captured["body"]
     assert captured["timeout"] == 60
+
+
+def test_plugin_command_returns_error_instead_of_falling_through_unknown():
+    policy._telegram_command_context.set(None)
+
+    result = asyncio.run(policy.handle_approve("proposal-id sha256:value"))
+
+    assert result.startswith("Apply proposal command failed:")
+    assert "identity is unavailable" in result
