@@ -324,6 +324,33 @@ manual delivery 작업의 proposal에는 pending approval이 함께 생성된다
 적용은 성공했지만 상태 응답이 중단된 경우에는 approval의 `applied` 상태를 기준으로
 delivery를 재개할 수 있다.
 
+`commit`, `auto`, `pr` 작업은 approval을 만들지 않고 immutable proposal과 현재
+worktree diff가 일치하는지 다시 확인한 후 delivery한다. `commit`은 작업 branch에
+로컬 커밋을 만들고 worktree만 제거하여 branch를 저장소에 남긴다. `pr`은 job 생성
+시점에 고정한 remote 이름·URL과 base branch를 재검증하고, profile에서 허용한 GitHub
+remote에만 push한 뒤 `gh pr create`를 실행한다. 성공 후 로컬 worktree와 작업 branch를
+제거한다. `auto`는 push/PR 권한, 허용 remote, base branch가 모두 유효할 때만 `pr`을
+선택하고 그 외에는 `commit`으로 제한한다. Remote가 없으면 `commit`은 정상 동작하고
+명시적 `pr`은 적용 전에 실패한다.
+
+Fetch URL과 push URL은 각각 job metadata에 고정하며 둘이 동일한 GitHub 저장소를
+가리키는지 확인한다. Commit/Push 시 repository hook과 commit signing은 실행하지 않는다.
+
+```yaml
+profiles:
+  dev-bot:
+    allowed_delivery_modes: ["manual", "auto", "commit", "pr"]
+    allowed_remote_names: ["origin"]
+    allowed_remote_hosts: ["github.com"]
+    allow_git_push: true
+    allow_pull_requests: true
+    git_author_name: "host-coding-agent"
+    git_author_email: "host-coding-agent@localhost"
+```
+
+PR 기능은 host에서 인증된 `gh` CLI와 해당 remote에 대한 Git push 권한이 필요하다.
+기본 설정에서는 push와 PR 생성이 모두 비활성화되어 있다.
+
 ```yaml
 version: 1
 tests:

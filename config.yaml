@@ -103,6 +103,13 @@ profiles:
     allowed_modes:
       - "read_only"
       - "propose_patch"
+    allowed_delivery_modes: ["manual", "auto", "commit"]
+    allowed_remote_names: ["origin"]
+    allowed_remote_hosts: ["github.com"]
+    allow_git_push: false
+    allow_pull_requests: false
+    git_author_name: "host-coding-agent"
+    git_author_email: "host-coding-agent@localhost"
     default_cwd: "/opt/data/profiles/dev-bot/workspace"
     default_agent: "auto"
     default_mode: "propose_patch"

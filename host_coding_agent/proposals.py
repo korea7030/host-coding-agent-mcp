@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .approvals import ApprovalError, ApprovalStore
 from .artifacts import ArtifactError, ProposalStore, extract_diff_paths
-from .models import AgentName, WorktreeProposalResult, WorktreeStatus
+from .models import AgentName, DeliveryMode, WorktreeProposalResult, WorktreeStatus
 from .worktrees import WorktreeError, WorktreeManager
 
 
@@ -51,7 +51,7 @@ def _validate_delivery_target(repository: Path, base_commit: str) -> None:
         raise WorktreeProposalError("repository has uncommitted or untracked changes")
 
 
-def _worktree_diff(worktree: Path, base_commit: str) -> str:
+def build_worktree_diff(worktree: Path, base_commit: str) -> str:
     index_path: str | None = None
     try:
         with tempfile.NamedTemporaryFile(prefix="hca-index-", delete=False) as handle:
@@ -98,7 +98,7 @@ def create_managed_worktree_proposal(
     try:
         worktree = manager.validate_checkout(job_id, profile=profile)
         _validate_delivery_target(job.repository, job.base_commit)
-        diff_text = _worktree_diff(worktree, job.base_commit)
+        diff_text = build_worktree_diff(worktree, job.base_commit)
         changed_files = extract_diff_paths(diff_text, job.repository)
         proposal = proposals.create_with_task_hash(
             profile=profile,
@@ -107,7 +107,8 @@ def create_managed_worktree_proposal(
             task_hash=job.task_hash,
             diff_text=diff_text,
         )
-        approvals.create_pending(proposal)
+        if job.delivery_mode == DeliveryMode.manual:
+            approvals.create_pending(proposal)
         manager.mark_proposed(
             job_id,
             profile=profile,

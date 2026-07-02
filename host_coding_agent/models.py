@@ -72,6 +72,27 @@ class ProfileConfig(BaseModel):
     default_cwd: Path | None = None
     default_agent: AgentName = AgentName.auto
     default_mode: RunMode = RunMode.propose_patch
+    allowed_delivery_modes: list[DeliveryMode] = Field(
+        default_factory=lambda: [
+            DeliveryMode.manual,
+            DeliveryMode.auto,
+            DeliveryMode.commit,
+        ]
+    )
+    allowed_remote_names: list[str] = Field(default_factory=lambda: ["origin"])
+    allowed_remote_hosts: list[str] = Field(default_factory=lambda: ["github.com"])
+    allow_git_push: bool = False
+    allow_pull_requests: bool = False
+    git_author_name: str = Field(
+        default="host-coding-agent",
+        min_length=1,
+        max_length=200,
+    )
+    git_author_email: str = Field(
+        default="host-coding-agent@localhost",
+        min_length=3,
+        max_length=320,
+    )
     context: ExecutionContext = Field(default_factory=ExecutionContext)
 
 

@@ -155,6 +155,45 @@ class WorktreeManager:
                     BEGIN
                         SELECT RAISE(ABORT, 'worktree proposal links cannot be deleted');
                     END;
+                CREATE TABLE IF NOT EXISTS worktree_delivery_targets (
+                    job_id TEXT PRIMARY KEY,
+                    base_branch TEXT,
+                    remote_name TEXT,
+                    remote_url TEXT,
+                    remote_push_url TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(job_id) REFERENCES worktree_jobs(job_id)
+                );
+                CREATE TRIGGER IF NOT EXISTS worktree_delivery_targets_no_update
+                    BEFORE UPDATE ON worktree_delivery_targets
+                    BEGIN
+                        SELECT RAISE(ABORT, 'worktree delivery targets are immutable');
+                    END;
+                CREATE TRIGGER IF NOT EXISTS worktree_delivery_targets_no_delete
+                    BEFORE DELETE ON worktree_delivery_targets
+                    BEGIN
+                        SELECT RAISE(ABORT, 'worktree delivery targets cannot be deleted');
+                    END;
+                CREATE TABLE IF NOT EXISTS worktree_deliveries (
+                    job_id TEXT PRIMARY KEY,
+                    resolved_mode TEXT NOT NULL,
+                    commit_sha TEXT NOT NULL,
+                    remote_name TEXT,
+                    remote_url TEXT,
+                    pr_url TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(job_id) REFERENCES worktree_jobs(job_id)
+                );
+                CREATE TRIGGER IF NOT EXISTS worktree_deliveries_no_update
+                    BEFORE UPDATE ON worktree_deliveries
+                    BEGIN
+                        SELECT RAISE(ABORT, 'worktree deliveries are immutable');
+                    END;
+                CREATE TRIGGER IF NOT EXISTS worktree_deliveries_no_delete
+                    BEFORE DELETE ON worktree_deliveries
+                    BEGIN
+                        SELECT RAISE(ABORT, 'worktree deliveries cannot be deleted');
+                    END;
                 CREATE TABLE IF NOT EXISTS worktree_cleanup_runs (
                     cleanup_id TEXT PRIMARY KEY,
                     job_id TEXT NOT NULL,
@@ -248,6 +287,47 @@ class WorktreeManager:
         base_commit = _run_git(
             ["-C", str(repository_root), "rev-parse", "HEAD"]
         )
+        base_branch = _run_git(
+            ["-C", str(repository_root), "branch", "--show-current"]
+        ) or None
+        remote_names = _run_git(
+            ["-C", str(repository_root), "remote"]
+        ).splitlines()
+        remote_name = (
+            "origin"
+            if "origin" in remote_names
+            else remote_names[0] if len(remote_names) == 1 else None
+        )
+        remote_url = (
+            _run_git(
+                ["-C", str(repository_root), "remote", "get-url", remote_name]
+            )
+            if remote_name
+            else None
+        )
+        remote_push_url = (
+            _run_git(
+                [
+                    "-C",
+                    str(repository_root),
+                    "remote",
+                    "get-url",
+                    "--push",
+                    remote_name,
+                ]
+            )
+            if remote_name
+            else None
+        )
+        if delivery_mode == DeliveryMode.pr and (
+            not base_branch
+            or not remote_name
+            or not remote_url
+            or not remote_push_url
+        ):
+            raise WorktreeError(
+                "PR delivery requires an unambiguous remote and base branch"
+            )
         job_id = uuid.uuid4().hex
         branch = (
             f"{self.branch_prefix}/{_safe_branch_segment(profile)}/{job_id}"
@@ -271,6 +351,7 @@ class WorktreeManager:
         }
         try:
             with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
                 connection.execute(
                     """
                     INSERT INTO repository_locks (
@@ -310,6 +391,22 @@ class WorktreeManager:
                     )
                     """,
                     record,
+                )
+                connection.execute(
+                    """
+                    INSERT INTO worktree_delivery_targets (
+                        job_id, base_branch, remote_name, remote_url,
+                        remote_push_url, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        job_id,
+                        base_branch,
+                        remote_name,
+                        remote_url,
+                        remote_push_url,
+                        now.isoformat(),
+                    ),
                 )
         except (sqlite3.Error, WorktreeError) as exc:
             self._rollback_creation(
@@ -453,11 +550,104 @@ class WorktreeManager:
         }
         return WorktreeJob.model_validate(record), link
 
+    def get_proposal_link(self, job_id: str, *, profile: str) -> dict[str, str]:
+        self.get(job_id, profile=profile)
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT proposal_id, proposal_sha256
+                FROM worktree_proposals WHERE job_id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            raise WorktreeError("worktree proposal link not found")
+        return dict(row)
+
+    def get_delivery_target(
+        self,
+        job_id: str,
+        *,
+        profile: str,
+    ) -> dict[str, str | None]:
+        self.get(job_id, profile=profile)
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT base_branch, remote_name, remote_url, remote_push_url
+                FROM worktree_delivery_targets WHERE job_id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            raise WorktreeError("worktree delivery target not found")
+        return dict(row)
+
+    def complete_automated_delivery(
+        self,
+        job_id: str,
+        *,
+        profile: str,
+        resolved_mode: DeliveryMode,
+        commit_sha: str,
+        remote_name: str | None = None,
+        remote_url: str | None = None,
+        pr_url: str | None = None,
+    ) -> WorktreeJob:
+        current = self.get(job_id, profile=profile)
+        if current.status != WorktreeStatus.proposed:
+            raise WorktreeError("worktree job is not ready for delivery")
+        try:
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute(
+                    """
+                    INSERT INTO worktree_deliveries (
+                        job_id, resolved_mode, commit_sha, remote_name,
+                        remote_url, pr_url, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        job_id,
+                        resolved_mode.value,
+                        commit_sha,
+                        remote_name,
+                        remote_url,
+                        pr_url,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+                cursor = connection.execute(
+                    """
+                    UPDATE worktree_jobs SET status = ?
+                    WHERE job_id = ? AND profile = ? AND status = ?
+                    """,
+                    (
+                        WorktreeStatus.delivered.value,
+                        job_id,
+                        profile,
+                        WorktreeStatus.proposed.value,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise WorktreeError("worktree delivery transition lost a race")
+                connection.execute(
+                    """
+                    DELETE FROM repository_locks
+                    WHERE repository = ? AND job_id = ?
+                    """,
+                    (str(current.repository), job_id),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise WorktreeError("worktree delivery record was rejected") from exc
+        return self.get(job_id, profile=profile)
+
     def cleanup(
         self,
         job_id: str,
         *,
         profile: str,
+        remove_branch: bool = True,
     ) -> WorktreeCleanupResult:
         job = self.get(job_id, profile=profile)
         if job.status not in _TERMINAL_STATUSES:
@@ -498,7 +688,7 @@ class WorktreeManager:
                     ]
                 ).splitlines()
             )
-            if job.branch in branches:
+            if remove_branch and job.branch in branches:
                 _run_git(
                     ["-C", str(job.repository), "branch", "-D", job.branch]
                 )
@@ -513,13 +703,17 @@ class WorktreeManager:
                     ]
                 ).splitlines()
             )
-            if not branch_removed:
+            if remove_branch and not branch_removed:
                 raise WorktreeError("managed worktree branch still exists")
         except WorktreeError as exc:
             error = str(exc)
         result = WorktreeCleanupResult(
             job_id=job_id,
-            ok=worktree_removed and branch_removed and error is None,
+            ok=(
+                worktree_removed
+                and (branch_removed or not remove_branch)
+                and error is None
+            ),
             worktree_removed=worktree_removed,
             branch_removed=branch_removed,
             error=error,

@@ -121,6 +121,20 @@ def load_config(path: str | Path) -> AppConfig:
             raise ConfigError(
                 f"profile {name!r} default_mode is not in allowed_modes"
             )
+        if not profile.allowed_delivery_modes:
+            raise ConfigError(
+                f"profile {name!r} requires at least one allowed delivery mode"
+            )
+        if any(
+            not remote.strip() or any(char.isspace() for char in remote)
+            for remote in profile.allowed_remote_names
+        ):
+            raise ConfigError(f"profile {name!r} has an invalid remote name")
+        if any(
+            not host.strip() or "/" in host or "@" in host
+            for host in profile.allowed_remote_hosts
+        ):
+            raise ConfigError(f"profile {name!r} has an invalid remote host")
     return config
 
 
