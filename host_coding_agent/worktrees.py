@@ -289,6 +289,28 @@ class WorktreeManager:
             raise WorktreeError("worktree status transition was rejected") from exc
         return self.get(job_id, profile=profile)
 
+    def validate_checkout(self, job_id: str, *, profile: str) -> Path:
+        job = self.get(job_id, profile=profile)
+        worktree = Path(os.path.realpath(job.worktree))
+        if worktree == self.root or not worktree.is_relative_to(self.root):
+            raise WorktreeError("worktree path escaped the managed root")
+        if not worktree.is_dir():
+            raise WorktreeError("managed worktree directory is missing")
+        actual_root = Path(
+            _run_git(["-C", str(worktree), "rev-parse", "--show-toplevel"])
+        )
+        if Path(os.path.realpath(actual_root)) != worktree:
+            raise WorktreeError("managed worktree Git root does not match")
+        actual_head = _run_git(["-C", str(worktree), "rev-parse", "HEAD"])
+        if actual_head != job.base_commit:
+            raise WorktreeError("managed worktree base commit changed before execution")
+        actual_branch = _run_git(
+            ["-C", str(worktree), "branch", "--show-current"]
+        )
+        if actual_branch != job.branch:
+            raise WorktreeError("managed worktree branch does not match")
+        return worktree
+
     def get(self, job_id: str, *, profile: str) -> WorktreeJob:
         with self._connect() as connection:
             row = connection.execute(

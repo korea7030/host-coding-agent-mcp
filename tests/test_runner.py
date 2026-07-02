@@ -4,11 +4,13 @@ from pathlib import Path
 from host_coding_agent.models import AgentName, AttemptResult, ExecutionContext, RunMode
 from host_coding_agent.runner import (
     OPENCODE_READONLY_CONFIG,
+    OPENCODE_WORKTREE_CONFIG,
     _agent_text,
     _build_command,
     _extract_diff,
     _prompt,
     run_coding_agent,
+    run_managed_worktree_agent,
 )
 
 
@@ -33,6 +35,45 @@ def test_opencode_readonly_policy_enables_omo_delegation_but_denies_mutation_and
     assert policy["bash"] == "deny"
     assert policy["task"] == "allow"
     assert policy["external_directory"] == "deny"
+
+
+def test_opencode_worktree_policy_allows_development_but_denies_external_paths():
+    config = json.loads(OPENCODE_WORKTREE_CONFIG)
+    policy = config["agent"]["host-mcp-worktree"]["permission"]
+    assert policy["edit"] == "allow"
+    assert policy["bash"] == "allow"
+    assert policy["task"] == "allow"
+    assert policy["external_directory"] == "deny"
+
+
+def test_write_mode_commands_are_restricted_to_managed_worktree(
+    config,
+):
+    worktree = config.security.allowed_roots[0]
+
+    codex_command, _ = _build_command(
+        AgentName.codex,
+        "change app",
+        RunMode.apply_patch,
+        worktree,
+        config,
+    )
+    sandbox_index = codex_command.index("-s")
+    assert codex_command[sandbox_index + 1] == "workspace-write"
+    assert codex_command[codex_command.index("-C") + 1] == str(worktree)
+
+    for agent in (AgentName.opencode, AgentName.antigravity):
+        command, _ = _build_command(
+            agent,
+            "change app",
+            RunMode.apply_patch,
+            worktree,
+            config,
+        )
+        assert Path(command[0]).name == "sandbox-exec"
+        profile = command[command.index("-p") + 1]
+        assert f'(subpath "{worktree}")' in profile
+        assert "(deny file-write*)" in profile
 
 
 def test_prompt_includes_assistant_and_structured_execution_context():

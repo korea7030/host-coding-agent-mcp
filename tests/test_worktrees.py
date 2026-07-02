@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from host_coding_agent.models import DeliveryMode, WorktreeStatus
+from host_coding_agent.models import AgentName, AttemptResult
+from host_coding_agent.runner import run_managed_worktree_agent
 from host_coding_agent.worktrees import WorktreeError, WorktreeManager
 
 
@@ -207,3 +209,100 @@ def test_rejects_invalid_status_transition(tmp_path):
             profile="dev-bot",
             status=WorktreeStatus.tested,
         )
+
+
+def test_managed_agent_runs_only_in_worktree_and_marks_job_active(
+    config,
+    tmp_path,
+    monkeypatch,
+):
+    repository = _repository(tmp_path)
+    manager = _manager(tmp_path)
+    job = manager.create(
+        repository=repository,
+        profile="dev-bot",
+        task="change app",
+    )
+
+    def successful_attempt(
+        agent,
+        task,
+        mode,
+        cwd,
+        timeout_sec,
+        app_config,
+        assistant_id,
+        context,
+    ):
+        assert cwd == job.worktree
+        assert mode.value == "apply_patch"
+        (cwd / "app.py").write_text("agent change\n")
+        return AttemptResult(
+            agent=agent,
+            ok=True,
+            returncode=0,
+            stdout="done",
+        )
+
+    monkeypatch.setattr(
+        "host_coding_agent.runner._run_attempt",
+        successful_attempt,
+    )
+    result = run_managed_worktree_agent(
+        manager=manager,
+        job_id=job.job_id,
+        profile="dev-bot",
+        task="change app",
+        agent=AgentName.codex,
+        timeout_sec=30,
+        config=config,
+        allowed_agents={AgentName.codex},
+    )
+
+    assert result.ok
+    assert result.cwd == job.worktree
+    assert manager.get(
+        job.job_id,
+        profile="dev-bot",
+    ).status == WorktreeStatus.active
+    assert (job.worktree / "app.py").read_text() == "agent change\n"
+    assert (repository / "app.py").read_text() == "original\n"
+
+
+def test_managed_agent_failure_marks_job_failed(config, tmp_path, monkeypatch):
+    repository = _repository(tmp_path)
+    manager = _manager(tmp_path)
+    job = manager.create(
+        repository=repository,
+        profile="dev-bot",
+        task="change app",
+    )
+
+    def failed_attempt(agent, *args):
+        return AttemptResult(
+            agent=agent,
+            ok=False,
+            returncode=1,
+            stderr="failed",
+        )
+
+    monkeypatch.setattr(
+        "host_coding_agent.runner._run_attempt",
+        failed_attempt,
+    )
+    result = run_managed_worktree_agent(
+        manager=manager,
+        job_id=job.job_id,
+        profile="dev-bot",
+        task="change app",
+        agent=AgentName.codex,
+        timeout_sec=30,
+        config=config,
+        allowed_agents={AgentName.codex},
+    )
+
+    assert not result.ok
+    assert manager.get(
+        job.job_id,
+        profile="dev-bot",
+    ).status == WorktreeStatus.failed

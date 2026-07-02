@@ -47,6 +47,37 @@ OPENCODE_READONLY_CONFIG = json.dumps({
     },
 }, separators=(",", ":"))
 
+OPENCODE_WORKTREE_CONFIG = json.dumps({
+    "$schema": "https://opencode.ai/config.json",
+    "plugin": ["oh-my-openagent@latest"],
+    "agent": {
+        "host-mcp-worktree": {
+            "description": "Write-enabled agent restricted to a managed Git worktree",
+            "mode": "primary",
+            "model": "openai/gpt-5.4",
+            "permission": {
+                "*": "deny",
+                "read": {
+                    "*": "allow",
+                    "*.env": "deny",
+                    "*.env.*": "deny",
+                    "*.env.example": "allow",
+                },
+                "glob": "allow",
+                "grep": "allow",
+                "lsp": "allow",
+                "edit": "allow",
+                "bash": "allow",
+                "task": "allow",
+                "external_directory": "deny",
+                "question": "deny",
+                "webfetch": "deny",
+                "websearch": "deny",
+            },
+        }
+    },
+}, separators=(",", ":"))
+
 
 def _resolve_command(command: str) -> str | None:
     expanded = str(Path(command).expanduser())
@@ -160,6 +191,17 @@ def _build_command(
                 Path.home() / ".local/state/opencode",
                 Path.home() / "Library/Caches",
             ]) + command
+        else:
+            command.extend(["--agent", "host-mcp-worktree"])
+            command = _sandbox_prefix(cwd, [
+                cwd,
+                Path("/private/tmp"),
+                Path("/private/var/folders"),
+                Path.home() / ".cache/opencode",
+                Path.home() / ".local/share/opencode",
+                Path.home() / ".local/state/opencode",
+                Path.home() / "Library/Caches",
+            ]) + command
         command.append(prompt)
         prompt = None
     else:
@@ -168,6 +210,14 @@ def _build_command(
         ]
         if mode != RunMode.apply_patch:
             command = _sandbox_prefix(cwd, [
+                Path("/private/tmp"),
+                Path("/private/var/folders"),
+                Path.home() / ".gemini/antigravity-cli",
+                Path.home() / ".gemini/config",
+            ]) + command
+        else:
+            command = _sandbox_prefix(cwd, [
+                cwd,
                 Path("/private/tmp"),
                 Path("/private/var/folders"),
                 Path.home() / ".gemini/antigravity-cli",
@@ -212,8 +262,14 @@ def _run_attempt(
         env={
             **os.environ,
             **(
-                {"OPENCODE_CONFIG_CONTENT": OPENCODE_READONLY_CONFIG}
-                if agent == AgentName.opencode and mode != RunMode.apply_patch else {}
+                {
+                    "OPENCODE_CONFIG_CONTENT": (
+                        OPENCODE_WORKTREE_CONFIG
+                        if mode == RunMode.apply_patch
+                        else OPENCODE_READONLY_CONFIG
+                    )
+                }
+                if agent == AgentName.opencode else {}
             ),
         },
     )
@@ -381,4 +437,121 @@ def run_coding_agent(
             for item in attempts
         ],
     })
+    return result
+
+
+def run_managed_worktree_agent(
+    *,
+    manager,
+    job_id: str,
+    profile: str,
+    task: str,
+    agent: AgentName,
+    timeout_sec: int,
+    config: AppConfig,
+    assistant_id: str | None = None,
+    context: ExecutionContext | None = None,
+    allowed_agents: set[AgentName] | None = None,
+) -> RunResult:
+    from .models import WorktreeStatus
+
+    started = time.monotonic()
+    job = manager.get(job_id, profile=profile)
+    if job.status != WorktreeStatus.created:
+        raise SecurityViolation("worktree job is not ready for agent execution")
+    worktree = manager.validate_checkout(job_id, profile=profile)
+    validate_task(task)
+    if assistant_id and assistant_id != profile:
+        raise SecurityViolation("assistant_id does not match worktree profile")
+    if context:
+        context_text = json.dumps(
+            context.model_dump(exclude_none=True),
+            ensure_ascii=False,
+        )
+        if context_text != "{}":
+            validate_task(context_text)
+    manager.transition(
+        job_id,
+        profile=profile,
+        status=WorktreeStatus.active,
+    )
+    timeout_sec = max(1, min(timeout_sec, config.security.max_timeout_sec))
+    attempts: list[AttemptResult] = []
+    selected: AgentName | None = None
+    candidates = route_agents(task, agent, config)
+    if allowed_agents is not None:
+        candidates = [item for item in candidates if item in allowed_agents]
+    for candidate in candidates:
+        remaining = timeout_sec - int(time.monotonic() - started)
+        if remaining <= 0:
+            break
+        try:
+            attempt = _run_attempt(
+                candidate,
+                task,
+                RunMode.apply_patch,
+                worktree,
+                remaining,
+                config,
+                assistant_id or profile,
+                context,
+            )
+        except (FileNotFoundError, OSError, SecurityViolation) as exc:
+            attempt = AttemptResult(agent=candidate, ok=False, stderr=str(exc))
+        attempts.append(attempt)
+        if attempt.ok:
+            selected = candidate
+            break
+    if selected is None:
+        manager.transition(
+            job_id,
+            profile=profile,
+            status=WorktreeStatus.failed,
+        )
+    final = attempts[-1] if attempts else None
+    final_text = _agent_text(final) if final else ""
+    result = RunResult(
+        ok=selected is not None,
+        selected_agent=selected,
+        assistant_id=assistant_id or profile,
+        context=context,
+        cwd=worktree,
+        requested_cwd=str(job.repository),
+        path_mapping_applied=True,
+        mode=RunMode.apply_patch,
+        stdout=final_text,
+        stderr=final.stderr if final else "",
+        summary=final_text[:2000],
+        redacted=bool(
+            final
+            and ("[REDACTED]" in final.stdout or "[REDACTED]" in final.stderr)
+        ),
+        results=attempts,
+        error=None if selected else "all available agents failed",
+    )
+    _audit(
+        config,
+        {
+            "timestamp": datetime.now().astimezone().isoformat(),
+            "tool": "run_managed_worktree_agent",
+            "job_id": job_id,
+            "profile": profile,
+            "agent": selected.value if selected else None,
+            "requested_agent": agent.value,
+            "repository": str(job.repository),
+            "worktree": str(worktree),
+            "task_hash": "sha256:" + hashlib.sha256(task.encode()).hexdigest(),
+            "duration_sec": round(time.monotonic() - started, 3),
+            "ok": result.ok,
+            "attempts": [
+                {
+                    "agent": item.agent.value,
+                    "returncode": item.returncode,
+                    "timed_out": item.timed_out,
+                    "stderr_preview": item.stderr[:1000],
+                }
+                for item in attempts
+            ],
+        },
+    )
     return result
