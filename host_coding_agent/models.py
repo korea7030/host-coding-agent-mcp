@@ -37,6 +37,11 @@ class DeliveryMode(str, Enum):
     report = "report"
 
 
+class IsolationMode(str, Enum):
+    direct = "direct"
+    worktree = "worktree"
+
+
 class ExecutionContext(BaseModel):
     """Per-call project preferences supplied by the invoking assistant."""
 
@@ -83,6 +88,10 @@ class ProfileConfig(BaseModel):
     allowed_remote_hosts: list[str] = Field(default_factory=lambda: ["github.com"])
     allow_git_push: bool = False
     allow_pull_requests: bool = False
+    allowed_isolation_modes: list[IsolationMode] = Field(
+        default_factory=lambda: [IsolationMode.worktree]
+    )
+    default_isolation_mode: IsolationMode = IsolationMode.worktree
     git_author_name: str = Field(
         default="host-coding-agent",
         min_length=1,

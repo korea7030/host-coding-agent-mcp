@@ -125,6 +125,14 @@ def load_config(path: str | Path) -> AppConfig:
             raise ConfigError(
                 f"profile {name!r} requires at least one allowed delivery mode"
             )
+        if not profile.allowed_isolation_modes:
+            raise ConfigError(
+                f"profile {name!r} requires at least one allowed isolation mode"
+            )
+        if profile.default_isolation_mode not in profile.allowed_isolation_modes:
+            raise ConfigError(
+                f"profile {name!r} default isolation mode is not allowed"
+            )
         if any(
             not remote.strip() or any(char.isspace() for char in remote)
             for remote in profile.allowed_remote_names

@@ -108,6 +108,8 @@ profiles:
     allowed_remote_hosts: ["github.com"]
     allow_git_push: false
     allow_pull_requests: false
+    allowed_isolation_modes: ["direct", "worktree"]
+    default_isolation_mode: "direct"
     git_author_name: "host-coding-agent"
     git_author_email: "host-coding-agent@localhost"
     default_cwd: "/opt/data/profiles/dev-bot/workspace"
@@ -126,6 +128,8 @@ profiles:
     approval_identities: ["telegram:7965486003"]
     allowed_agents: ["antigravity", "codex", "opencode"]
     allowed_modes: ["read_only", "propose_patch"]
+    allowed_isolation_modes: ["direct", "worktree"]
+    default_isolation_mode: "direct"
     default_cwd: "/opt/data/profiles/invest-bot/workspace"
     default_agent: "auto"
     default_mode: "propose_patch"
@@ -142,6 +146,8 @@ profiles:
     approval_identities: ["telegram:7965486003"]
     allowed_agents: ["antigravity", "codex", "opencode"]
     allowed_modes: ["read_only", "propose_patch"]
+    allowed_isolation_modes: ["direct", "worktree"]
+    default_isolation_mode: "direct"
     default_cwd: "/opt/data/profiles/research-bot/workspace"
     default_agent: "auto"
     default_mode: "propose_patch"
@@ -158,6 +164,8 @@ profiles:
     approval_identities: ["telegram:7965486003"]
     allowed_agents: ["antigravity", "codex", "opencode"]
     allowed_modes: ["read_only", "propose_patch"]
+    allowed_isolation_modes: ["direct", "worktree"]
+    default_isolation_mode: "direct"
     default_cwd: "/opt/data/profiles/youtube-bot/workspace"
     default_agent: "auto"
     default_mode: "propose_patch"

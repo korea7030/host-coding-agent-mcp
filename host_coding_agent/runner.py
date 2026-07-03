@@ -348,6 +348,7 @@ def run_coding_agent(
     assistant_id: str | None = None,
     context: ExecutionContext | None = None,
     allowed_agents: set[AgentName] | None = None,
+    allow_apply_patch_override: bool = False,
 ) -> RunResult:
     started = time.monotonic()
     canonical_cwd = validate_cwd(cwd, config)
@@ -358,7 +359,11 @@ def run_coding_agent(
         context_text = json.dumps(context.model_dump(exclude_none=True), ensure_ascii=False)
         if context_text != "{}":
             validate_task(context_text)
-    if mode == RunMode.apply_patch and not config.security.allow_apply_patch:
+    if (
+        mode == RunMode.apply_patch
+        and not config.security.allow_apply_patch
+        and not allow_apply_patch_override
+    ):
         raise SecurityViolation("apply_patch is disabled")
     timeout_sec = max(1, min(timeout_sec, config.security.max_timeout_sec))
     attempts: list[AttemptResult] = []

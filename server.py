@@ -28,7 +28,7 @@ from host_coding_agent.automated_delivery import (
 )
 from host_coding_agent.config import validate_profile_cwd
 from host_coding_agent.delivery import ManualDelivery, ManualDeliveryError
-from host_coding_agent.models import DeliveryMode, WorktreeStatus
+from host_coding_agent.models import DeliveryMode, IsolationMode, WorktreeStatus
 from host_coding_agent.profiles import (
     authenticated_profile,
     merge_context,
@@ -460,6 +460,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         cwd: str | None = None,
         agent: AgentName | None = None,
         delivery_mode: DeliveryMode = DeliveryMode.manual,
+        isolation_mode: IsolationMode | None = None,
         timeout_sec: int = 900,
         assistant_id: str | None = None,
         context: ExecutionContext | None = None,
@@ -468,18 +469,73 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         stage = "create"
         job = None
         try:
-            profile_name, profile, job = create_managed_job(
-                task=task,
-                cwd=cwd,
-                delivery_mode=delivery_mode,
-                assistant_id=assistant_id,
+            profile_name, profile = development_profile(assistant_id)
+            resolved_isolation = (
+                isolation_mode or profile.default_isolation_mode
             )
+            if resolved_isolation not in profile.allowed_isolation_modes:
+                raise SecurityViolation(
+                    "isolation mode is not allowed for this profile"
+                )
             selected_agent = agent or profile.default_agent
             if (
                 selected_agent != AgentName.auto
                 and selected_agent not in profile.allowed_agents
             ):
                 raise SecurityViolation("agent is not allowed for this profile")
+            if resolved_isolation == IsolationMode.direct:
+                if delivery_mode != DeliveryMode.manual:
+                    raise SecurityViolation(
+                        "delivery_mode applies only to worktree isolation"
+                    )
+                requested_cwd = cwd or (
+                    str(profile.default_cwd)
+                    if profile.default_cwd is not None
+                    else None
+                )
+                if requested_cwd is None:
+                    raise ConfigError(
+                        "cwd is required because this profile has no default_cwd"
+                    )
+                direct_cwd = validate_profile_cwd(
+                    requested_cwd,
+                    profile_name,
+                    config,
+                    runtime_registry=runtime_registry,
+                )
+                stage = "direct"
+                result = execute_agent(
+                    task=task,
+                    cwd=str(direct_cwd),
+                    agent=selected_agent,
+                    mode=RunMode.apply_patch,
+                    timeout_sec=timeout_sec,
+                    config=config,
+                    assistant_id=profile_name,
+                    context=merge_context(profile.context, context),
+                    allowed_agents=set(profile.allowed_agents),
+                    allow_apply_patch_override=True,
+                )
+                return {
+                    "ok": result.ok,
+                    "stage": "completed" if result.ok else stage,
+                    "isolation_mode": IsolationMode.direct.value,
+                    "applied_immediately": result.ok,
+                    "selected_agent": (
+                        result.selected_agent.value
+                        if result.selected_agent
+                        else None
+                    ),
+                    "cwd": str(result.cwd),
+                    "summary": result.summary,
+                    "error": result.error,
+                }
+            profile_name, profile, job = create_managed_job(
+                task=task,
+                cwd=cwd,
+                delivery_mode=delivery_mode,
+                assistant_id=assistant_id,
+            )
             stage = "agent"
             run_result = run_managed_worktree_agent(
                 manager=worktree_manager,
@@ -551,6 +607,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                     "proposal_sha256": proposal_result.proposal_sha256,
                     "changed_files": proposal_result.changed_files,
                     "requires_approval": True,
+                    "isolation_mode": IsolationMode.worktree.value,
                 }
             stage = "delivery"
             delivery_result = automated_delivery.deliver(
@@ -566,6 +623,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                 "proposal_sha256": proposal_result.proposal_sha256,
                 "changed_files": proposal_result.changed_files,
                 "test_commands": len(test_result.results),
+                "isolation_mode": IsolationMode.worktree.value,
             }
         except (
             ApprovalError,

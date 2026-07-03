@@ -12,6 +12,7 @@ from host_coding_agent.approvals import ApprovalStore
 from host_coding_agent.models import (
     AgentName,
     DeliveryMode,
+    IsolationMode,
     ProfileConfig,
     RunMode,
     RunResult,
@@ -56,6 +57,121 @@ def _repository(root: Path) -> Path:
         check=True,
     )
     return repository
+
+
+@pytest.mark.asyncio
+async def test_single_call_direct_mode_modifies_non_git_workspace(
+    config,
+    monkeypatch,
+    tmp_path: Path,
+):
+    workspace = config.security.allowed_roots[0] / "non-git-workspace"
+    workspace.mkdir()
+    (workspace / "app.py").write_text("original\n")
+    config.auth.enabled = True
+    config.profiles["dev-bot"] = ProfileConfig(
+        token_env="TEST_DEV_TOKEN",
+        allowed_roots=[workspace],
+        allowed_agents=[AgentName.opencode],
+        allowed_modes=[RunMode.propose_patch],
+        allowed_isolation_modes=[IsolationMode.direct, IsolationMode.worktree],
+        default_isolation_mode=IsolationMode.direct,
+        default_cwd=workspace,
+        default_agent=AgentName.opencode,
+    )
+    monkeypatch.setenv("TEST_DEV_TOKEN", "d" * 32)
+    config.artifacts.path = tmp_path / "artifacts" / "proposals.db"
+    config.worktrees.root = tmp_path / "worktrees"
+    config.worktrees.state_path = tmp_path / "artifacts" / "worktrees.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(config.model_dump(mode="json"), sort_keys=False)
+    )
+    monkeypatch.setattr(
+        server,
+        "get_access_token",
+        lambda: _access_token(),
+    )
+
+    def fake_direct_agent(**kwargs):
+        assert kwargs["mode"] == RunMode.apply_patch
+        assert kwargs["allow_apply_patch_override"] is True
+        target = Path(kwargs["cwd"])
+        (target / "app.py").write_text("directly modified\n")
+        return RunResult(
+            ok=True,
+            selected_agent=AgentName.opencode,
+            assistant_id="dev-bot",
+            cwd=target,
+            mode=RunMode.apply_patch,
+            summary="modified app.py",
+        )
+
+    monkeypatch.setattr(server, "execute_agent", fake_direct_agent)
+    mcp, _ = server.create_server(config_path)
+
+    result = await mcp.call_tool(
+        "run_development_task",
+        {
+            "task": "change app",
+            "agent": "opencode",
+        },
+    )
+    data = result.structured_content
+
+    assert data["ok"]
+    assert data["isolation_mode"] == "direct"
+    assert data["applied_immediately"]
+    assert data["selected_agent"] == "opencode"
+    assert (workspace / "app.py").read_text() == "directly modified\n"
+    manager = WorktreeManager(
+        root=config.worktrees.root,
+        state_path=config.worktrees.state_path,
+    )
+    assert manager.list(profile="dev-bot") == []
+
+
+@pytest.mark.asyncio
+async def test_direct_mode_requires_profile_permission(
+    config,
+    monkeypatch,
+    tmp_path: Path,
+):
+    workspace = config.security.allowed_roots[0]
+    config.auth.enabled = True
+    config.profiles["dev-bot"] = ProfileConfig(
+        token_env="TEST_DEV_TOKEN",
+        allowed_roots=[workspace],
+        allowed_agents=[AgentName.codex],
+        allowed_modes=[RunMode.propose_patch],
+        default_cwd=workspace,
+        default_agent=AgentName.codex,
+    )
+    monkeypatch.setenv("TEST_DEV_TOKEN", "d" * 32)
+    config.artifacts.path = tmp_path / "artifacts" / "proposals.db"
+    config.worktrees.root = tmp_path / "worktrees"
+    config.worktrees.state_path = tmp_path / "artifacts" / "worktrees.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(config.model_dump(mode="json"), sort_keys=False)
+    )
+    monkeypatch.setattr(
+        server,
+        "get_access_token",
+        lambda: _access_token(),
+    )
+    mcp, _ = server.create_server(config_path)
+
+    result = await mcp.call_tool(
+        "run_development_task",
+        {
+            "task": "change app",
+            "isolation_mode": "direct",
+        },
+    )
+
+    assert not result.structured_content["ok"]
+    assert "isolation mode is not allowed" in result.structured_content["error"]
 
 
 @pytest.mark.asyncio

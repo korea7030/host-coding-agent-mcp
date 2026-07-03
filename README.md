@@ -344,6 +344,8 @@ profiles:
     allowed_remote_hosts: ["github.com"]
     allow_git_push: true
     allow_pull_requests: true
+    allowed_isolation_modes: ["direct", "worktree"]
+    default_isolation_mode: "direct"
     git_author_name: "host-coding-agent"
     git_author_email: "host-coding-agent@localhost"
 ```
@@ -351,12 +353,15 @@ profiles:
 PR 기능은 host에서 인증된 `gh` CLI와 해당 remote에 대한 Git push 권한이 필요하다.
 기본 설정에서는 push와 PR 생성이 모두 비활성화되어 있다.
 
-### Worktree MCP job API
+### Development MCP API
 
 일반 개발 요청에는 단일 `run_development_task` MCP tool을 사용한다. 이 도구가
-worktree 생성, coding agent 실행, 신뢰된 테스트, immutable proposal, delivery를
-한 번에 처리한다. `manual`은 proposal 생성 후 Telegram 승인을 기다리고,
-`commit`/`auto`/`pr`은 허용된 delivery까지 계속 진행한다.
+`direct` 또는 `worktree` 격리 방식을 profile 정책에 따라 선택한다.
+
+- `direct`: Git 없이 허용된 원본 workspace에서 coding agent가 즉시 수정·테스트한다.
+  Worktree, proposal, commit, approval은 만들지 않는다.
+- `worktree`: 원본과 격리해 개발·신뢰된 테스트·immutable proposal을 처리한다.
+  `manual`은 Telegram 승인을 기다리고 `commit`/`auto`/`pr`은 delivery까지 진행한다.
 
 호출 예:
 
@@ -365,7 +370,7 @@ worktree 생성, coding agent 실행, 신뢰된 테스트, immutable proposal, d
   "task": "로그인 오류를 수정하고 테스트해줘",
   "cwd": "/opt/data/profiles/dev-bot/workspace",
   "agent": "opencode",
-  "delivery_mode": "manual",
+  "isolation_mode": "direct",
   "timeout_sec": 900
 }
 ```
@@ -374,8 +379,16 @@ Telegram에서는 다음 정도의 자연어 요청이면 충분하다.
 
 ```text
 OpenCode로 현재 프로젝트의 로그인 오류를 수정하고 테스트해줘.
-개발은 host-coding-agent MCP의 run_development_task를 사용하고,
-완료되면 변경 내용을 보여준 뒤 적용 승인을 요청해.
+host-coding-agent MCP의 run_development_task를 direct 모드로 사용해.
+```
+
+Direct는 원본을 즉시 수정하므로 적용 승인과 자동 rollback이 없다. 변경 전 검토,
+실패 격리, 승인 적용이 필요하면 다음처럼 worktree를 요청한다.
+
+```text
+OpenCode로 로그인 오류를 수정하고 테스트해줘.
+run_development_task의 isolation_mode는 worktree,
+delivery_mode는 manual로 실행하고 적용 승인을 요청해.
 ```
 
 세부 제어·재시작·상태 조회가 필요한 경우 다음 단계별 tool을 사용한다.
