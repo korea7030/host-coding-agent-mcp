@@ -13,6 +13,7 @@ from typing import Any
 ALLOWED_DEVELOPMENT_MCP_TOOLS = frozenset(
     {
         "mcp_host_coding_agent_run_coding_agent",
+        "mcp_host_coding_agent_run_development_task",
         "mcp_host_coding_agent_run_antigravity",
         "mcp_host_coding_agent_run_codex",
         "mcp_host_coding_agent_run_opencode",
@@ -31,14 +32,15 @@ BLOCKED_NATIVE_TOOLS = frozenset(
 
 ROUTING_CONTEXT = """Development execution policy:
 - All code analysis, generation, modification, testing, refactoring, and deployment preparation for host projects MUST use the host-coding-agent MCP tools.
-- Default to mcp_host_coding_agent_run_coding_agent with agent="auto", mode="propose_patch", and timeout_sec=900.
+- Default development requests to mcp_host_coding_agent_run_development_task with agent="auto", isolation_mode="direct", and timeout_sec=900.
+- Direct mode does not require Git and modifies the authenticated workspace immediately. Do not inspect for .git or require a repository before calling it.
+- Use isolation_mode="worktree" only when the user explicitly requests isolation, approval, commit, or PR delivery.
 - Pass the current container workspace path as cwd (normally /opt/data/profiles/<profile>/workspace or a child). The MCP maps that authenticated profile path to its host workspace. Do not pass /opt/data itself.
 - The result cwd is the resolved macOS host path by design. Use requested_cwd and path_mapping_applied to verify the translation; do not treat a /Users/... result cwd as a mapping failure.
 - Keep each request narrowly scoped. Split large project analysis into multiple calls to avoid oversized tool results.
 - Never use terminal, execute_code, write_file, patch, delegate_task, or a directly launched coding-agent CLI for development.
 - If host-coding-agent MCP fails, report the failure. Do not fall back to a native development tool.
-- Coding agents are read-only and may only return findings or a proposed diff until a separate human approval is verified.
-- When a proposal_id is returned, show the proposal_id and proposal_sha256 to the user.
+- Direct mode coding agents may modify the mapped workspace. When worktree manual mode returns a proposal_id, show the proposal_id and proposal_sha256 to the user.
 - Only the external Telegram /apply_proposal command may apply a proposal. Do not claim that a patch was applied unless that command returns status=applied."""
 
 _telegram_command_context: contextvars.ContextVar[tuple[str, str] | None] = (
