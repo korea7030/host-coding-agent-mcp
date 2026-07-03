@@ -95,6 +95,9 @@ def test_creates_immutable_proposal_from_tested_worktree(tmp_path):
     assert result.changed_files == ["app.py", "new.py", "remove.txt"]
     assert result.proposal_id
     assert result.proposal_sha256
+    assert result.apply_command == (
+        f"/apply_proposal {result.proposal_id} {result.proposal_sha256}"
+    )
     assert manager.get(
         job.job_id, profile="dev-bot"
     ).status == WorktreeStatus.proposed

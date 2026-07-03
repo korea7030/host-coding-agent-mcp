@@ -270,6 +270,10 @@ async def test_single_call_development_workflow(
     )
     job = manager.get(data["job_id"], profile="dev-bot")
     if delivery_mode == "manual":
+        assert data["apply_command"] == (
+            f"/apply_proposal {data['proposal_id']} "
+            f"{data['proposal_sha256']}"
+        )
         assert job.status == WorktreeStatus.proposed
         assert job.worktree.exists()
         approval = ApprovalStore(config.artifacts.path).get_for_proposal(

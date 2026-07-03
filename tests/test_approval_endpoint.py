@@ -160,7 +160,9 @@ def test_telegram_approval_delivers_and_cleans_managed_worktree(
             json={
                 "action": "approve",
                 "proposal_id": proposal_result.proposal_id,
-                "proposal_sha256": proposal_result.proposal_sha256,
+                "proposal_sha256": proposal_result.proposal_sha256.removeprefix(
+                    "sha256:"
+                ),
                 "telegram_user_id": "123",
             },
             headers={"Authorization": f"Bearer {token}"},

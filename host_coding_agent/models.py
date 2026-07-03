@@ -270,6 +270,7 @@ class WorktreeProposalResult(BaseModel):
     ok: bool
     proposal_id: str | None = None
     proposal_sha256: str | None = None
+    apply_command: str | None = None
     changed_files: list[str] = Field(default_factory=list)
     error: str | None = None
 

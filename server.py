@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 from fastmcp import FastMCP
@@ -90,6 +91,20 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         auth=auth,
         mask_error_details=config.server.mask_error_details,
     )
+
+    def normalize_proposal_sha256(value: str) -> str:
+        candidate = value.strip()
+        if re.fullmatch(r"[0-9a-fA-F]{64}", candidate):
+            return f"sha256:{candidate.lower()}"
+        if re.fullmatch(r"sha256:[0-9a-fA-F]{64}", candidate):
+            return candidate.lower()
+        return candidate
+
+    def proposal_apply_command(proposal_id: str, proposal_sha256: str) -> str:
+        return (
+            f"/apply_proposal {proposal_id} "
+            f"{normalize_proposal_sha256(proposal_sha256)}"
+        )
 
     def execute_profile_request(
         *,
@@ -353,7 +368,9 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
             payload = await request.json()
             action = str(payload.get("action", ""))
             proposal_id = str(payload.get("proposal_id", ""))
-            proposal_sha256 = str(payload.get("proposal_sha256", ""))
+            proposal_sha256 = normalize_proposal_sha256(
+                str(payload.get("proposal_sha256", ""))
+            )
             actor = f"telegram:{payload.get('telegram_user_id', '')}"
             if actor not in profile.approval_identities:
                 return JSONResponse(
@@ -630,6 +647,10 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                     "selected_agent": run_result.selected_agent.value,
                     "proposal_id": proposal_result.proposal_id,
                     "proposal_sha256": proposal_result.proposal_sha256,
+                    "apply_command": proposal_apply_command(
+                        proposal_result.proposal_id,
+                        proposal_result.proposal_sha256,
+                    ),
                     "changed_files": proposal_result.changed_files,
                     "requires_approval": True,
                     "isolation_mode": IsolationMode.worktree.value,
@@ -802,6 +823,10 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                     "awaiting_approval": True,
                     "proposal_id": link["proposal_id"],
                     "proposal_sha256": link["proposal_sha256"],
+                    "apply_command": proposal_apply_command(
+                        link["proposal_id"],
+                        link["proposal_sha256"],
+                    ),
                     "approval_status": approval["status"],
                 }
             return automated_delivery.deliver(

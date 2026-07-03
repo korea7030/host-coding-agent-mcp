@@ -134,5 +134,11 @@ def create_managed_worktree_proposal(
         ok=True,
         proposal_id=proposal["proposal_id"],
         proposal_sha256=proposal["diff_sha256"],
+        apply_command=(
+            f"/apply_proposal {proposal['proposal_id']} "
+            f"{proposal['diff_sha256']}"
+            if job.delivery_mode == DeliveryMode.manual
+            else None
+        ),
         changed_files=changed_files,
     )
