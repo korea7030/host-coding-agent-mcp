@@ -11,21 +11,25 @@ authenticated `host-coding-agent` MCP server.
 1. A Hermes `pre_llm_call` hook injects the routing requirement on every turn.
 2. A Hermes `pre_tool_call` hook blocks native mutation and execution tools
    before dispatch.
-3. Hermes containers do not mount host project roots.
-4. The MCP server enforces profile identity, allowed roots, agents, modes, and
-   read-only/proposal sandboxes.
+3. Hermes containers receive only their profile-scoped `/opt/data` mount, not
+   arbitrary host project roots.
+4. The MCP server enforces profile identity, allowed roots, agents, isolation
+   modes, and process sandboxes.
 5. If MCP execution fails, Hermes must report the failure and must not fall
    back to native development tools.
 
 ## Allowed development path
 
+- `mcp_host_coding_agent_run_development_task`
 - `mcp_host_coding_agent_run_coding_agent`
 - `mcp_host_coding_agent_run_antigravity`
 - `mcp_host_coding_agent_run_codex`
 - `mcp_host_coding_agent_run_opencode`
 
-The normal default is
-`run_coding_agent(agent="auto", mode="propose_patch", timeout_sec=900)`.
+The normal default is `run_development_task(agent="auto",
+isolation_mode="direct", timeout_sec=900)`. Direct mode does not require Git
+and modifies the mapped workspace immediately. Worktree mode is selected only
+for explicit isolation, approval, commit, or PR requests.
 Hermes passes its container workspace path as `cwd`; the MCP translates only
 the profile-scoped workspace root. The gateway registers its container ID
 outside the LLM tool loop, and the MCP derives the host path from Docker
@@ -46,15 +50,18 @@ These tools are blocked unconditionally while the plugin is enabled. This is
 intentionally fail-closed and means the profile cannot use them for non-coding
 tasks either.
 
-Read-only tools such as `read_file` and `search_files` remain available, but
-they cannot access host project roots because those roots are not mounted in
-the Hermes containers.
+Read-only tools such as `read_file` and `search_files` remain available for the
+container workspace. Native mutation and execution tools remain blocked.
 
-## Approval boundary
+## Direct and approval boundaries
 
-The coding agents remain read-only. Patch application is performed only by the
-external Telegram `/apply_proposal` gateway command. Internally Hermes maps the
-Telegram-compatible underscore to the plugin command `apply-proposal`. The host endpoint:
+Direct mode is a deliberate immediate-write path and does not create a proposal
+or require approval. The profile must explicitly allow direct isolation.
+
+In worktree manual mode, patch application is performed only by the external
+Telegram `/apply_proposal` gateway command. Internally Hermes maps the
+Telegram-compatible underscore to the plugin command `apply-proposal`. The host
+endpoint:
 
 - authenticates the profile bearer token and Telegram user allowlist;
 - binds approval to profile, user, workspace, proposal hash, and expiry;
