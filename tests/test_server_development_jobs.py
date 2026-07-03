@@ -124,6 +124,14 @@ async def test_single_call_direct_mode_modifies_non_git_workspace(
     assert data["applied_immediately"]
     assert data["selected_agent"] == "opencode"
     assert (workspace / "app.py").read_text() == "directly modified\n"
+    (workspace / "app.py").write_text("original again\n")
+    compatibility = await mcp.call_tool(
+        "run_opencode",
+        {"task": "change app"},
+    )
+    assert compatibility.structured_content["ok"]
+    assert compatibility.structured_content["isolation_mode"] == "direct"
+    assert (workspace / "app.py").read_text() == "directly modified\n"
     manager = WorktreeManager(
         root=config.worktrees.root,
         state_path=config.worktrees.state_path,

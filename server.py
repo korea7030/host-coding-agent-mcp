@@ -248,6 +248,64 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         )
         return profile_name, profile, job
 
+    def execute_direct_task(
+        *,
+        task: str,
+        cwd: str | None,
+        agent: AgentName,
+        timeout_sec: int,
+        assistant_id: str | None,
+        context: ExecutionContext | None,
+    ) -> dict:
+        profile_name, profile = development_profile(assistant_id)
+        if IsolationMode.direct not in profile.allowed_isolation_modes:
+            raise SecurityViolation(
+                "direct isolation mode is not allowed for this profile"
+            )
+        if agent != AgentName.auto and agent not in profile.allowed_agents:
+            raise SecurityViolation("agent is not allowed for this profile")
+        requested_cwd = cwd or (
+            str(profile.default_cwd)
+            if profile.default_cwd is not None
+            else None
+        )
+        if requested_cwd is None:
+            raise ConfigError(
+                "cwd is required because this profile has no default_cwd"
+            )
+        direct_cwd = validate_profile_cwd(
+            requested_cwd,
+            profile_name,
+            config,
+            runtime_registry=runtime_registry,
+        )
+        result = execute_agent(
+            task=task,
+            cwd=str(direct_cwd),
+            agent=agent,
+            mode=RunMode.apply_patch,
+            timeout_sec=timeout_sec,
+            config=config,
+            assistant_id=profile_name,
+            context=merge_context(profile.context, context),
+            allowed_agents=set(profile.allowed_agents),
+            allow_apply_patch_override=True,
+        )
+        return {
+            "ok": result.ok,
+            "stage": "completed" if result.ok else "direct",
+            "isolation_mode": IsolationMode.direct.value,
+            "applied_immediately": result.ok,
+            "selected_agent": (
+                result.selected_agent.value
+                if result.selected_agent
+                else None
+            ),
+            "cwd": str(result.cwd),
+            "summary": result.summary,
+            "error": result.error,
+        }
+
     @mcp.custom_route(
         "/runtime/register",
         methods=["POST"],
@@ -488,48 +546,15 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                     raise SecurityViolation(
                         "delivery_mode applies only to worktree isolation"
                     )
-                requested_cwd = cwd or (
-                    str(profile.default_cwd)
-                    if profile.default_cwd is not None
-                    else None
-                )
-                if requested_cwd is None:
-                    raise ConfigError(
-                        "cwd is required because this profile has no default_cwd"
-                    )
-                direct_cwd = validate_profile_cwd(
-                    requested_cwd,
-                    profile_name,
-                    config,
-                    runtime_registry=runtime_registry,
-                )
                 stage = "direct"
-                result = execute_agent(
+                return execute_direct_task(
                     task=task,
-                    cwd=str(direct_cwd),
+                    cwd=cwd,
                     agent=selected_agent,
-                    mode=RunMode.apply_patch,
                     timeout_sec=timeout_sec,
-                    config=config,
-                    assistant_id=profile_name,
-                    context=merge_context(profile.context, context),
-                    allowed_agents=set(profile.allowed_agents),
-                    allow_apply_patch_override=True,
+                    assistant_id=assistant_id,
+                    context=context,
                 )
-                return {
-                    "ok": result.ok,
-                    "stage": "completed" if result.ok else stage,
-                    "isolation_mode": IsolationMode.direct.value,
-                    "applied_immediately": result.ok,
-                    "selected_agent": (
-                        result.selected_agent.value
-                        if result.selected_agent
-                        else None
-                    ),
-                    "cwd": str(result.cwd),
-                    "summary": result.summary,
-                    "error": result.error,
-                }
             profile_name, profile, job = create_managed_job(
                 task=task,
                 cwd=cwd,
@@ -880,7 +905,17 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         task: str, cwd: str | None = None, mode: RunMode | None = None, timeout_sec: int = 900,
         assistant_id: str | None = None, context: ExecutionContext | None = None,
     ) -> dict:
+        """Run Antigravity with direct writes; pass read_only for analysis only."""
         try:
+            if mode != RunMode.read_only:
+                return execute_direct_task(
+                    task=task,
+                    cwd=cwd,
+                    agent=AgentName.antigravity,
+                    timeout_sec=timeout_sec,
+                    assistant_id=assistant_id,
+                    context=context,
+                )
             return execute_profile_request(
                 task=task, cwd=cwd, agent=AgentName.antigravity, mode=mode,
                 timeout_sec=timeout_sec, assistant_id=assistant_id, context=context,
@@ -893,7 +928,17 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         task: str, cwd: str | None = None, mode: RunMode | None = None, timeout_sec: int = 900,
         assistant_id: str | None = None, context: ExecutionContext | None = None,
     ) -> dict:
+        """Run Codex with direct writes; pass read_only for analysis only."""
         try:
+            if mode != RunMode.read_only:
+                return execute_direct_task(
+                    task=task,
+                    cwd=cwd,
+                    agent=AgentName.codex,
+                    timeout_sec=timeout_sec,
+                    assistant_id=assistant_id,
+                    context=context,
+                )
             return execute_profile_request(
                 task=task, cwd=cwd, agent=AgentName.codex, mode=mode,
                 timeout_sec=timeout_sec, assistant_id=assistant_id, context=context,
@@ -906,7 +951,17 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         task: str, cwd: str | None = None, mode: RunMode | None = None, timeout_sec: int = 900,
         assistant_id: str | None = None, context: ExecutionContext | None = None,
     ) -> dict:
+        """Run OpenCode with direct writes; pass read_only for analysis only."""
         try:
+            if mode != RunMode.read_only:
+                return execute_direct_task(
+                    task=task,
+                    cwd=cwd,
+                    agent=AgentName.opencode,
+                    timeout_sec=timeout_sec,
+                    assistant_id=assistant_id,
+                    context=context,
+                )
             return execute_profile_request(
                 task=task, cwd=cwd, agent=AgentName.opencode, mode=mode,
                 timeout_sec=timeout_sec, assistant_id=assistant_id, context=context,

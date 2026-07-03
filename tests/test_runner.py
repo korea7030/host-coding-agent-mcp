@@ -121,7 +121,11 @@ def test_run_result_echoes_context_and_audit_only_stores_context_hash(
         context=context,
     )
 
-    audit = json.loads(config.logging.path.read_text().strip())
+    audit_lines = config.logging.path.read_text().splitlines()
+    started_audit = json.loads(audit_lines[0])
+    audit = json.loads(audit_lines[-1])
+    assert started_audit["tool"] == "run_coding_agent_started"
+    assert started_audit["timeout_sec"] == 30
     assert result.assistant_id == "dev-bot"
     assert result.context == context
     assert audit["assistant_id"] == "dev-bot"

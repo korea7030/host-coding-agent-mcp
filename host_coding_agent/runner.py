@@ -371,6 +371,20 @@ def run_coding_agent(
     candidates = route_agents(task, agent, config)
     if allowed_agents is not None:
         candidates = [item for item in candidates if item in allowed_agents]
+    _audit(
+        config,
+        {
+            "timestamp": datetime.now().astimezone().isoformat(),
+            "tool": "run_coding_agent_started",
+            "requested_agent": agent.value,
+            "candidate_agents": [item.value for item in candidates],
+            "assistant_id": assistant_id,
+            "mode": mode.value,
+            "cwd": str(canonical_cwd),
+            "task_hash": "sha256:" + hashlib.sha256(task.encode()).hexdigest(),
+            "timeout_sec": timeout_sec,
+        },
+    )
     for candidate in candidates:
         remaining = timeout_sec - int(time.monotonic() - started)
         if remaining <= 0:
