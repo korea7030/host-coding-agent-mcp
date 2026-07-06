@@ -3,6 +3,15 @@
 All code analysis, generation, modification, testing, refactoring, and deployment
 preparation for host projects MUST use the `host-coding-agent` MCP server.
 
+Classify requests before routing. OAuth/login/token refresh/account connection,
+Hermes skill installation, MCP registration or configuration, and runtime
+browser installation are not host development. Route authentication to the
+target MCP or skill, skill/MCP lifecycle operations to Hermes profile
+management, and runtime dependencies to the environment where the target MCP
+executes. Project source and project dependency-file changes remain development
+work. A response with `error_code="non_development_task"` is final and
+non-retryable; do not retry it through another coding-agent call.
+
 Default development requests to
 `run_development_task(agent="auto", isolation_mode="direct", timeout_sec=900)`.
 Direct mode does not require Git and modifies the authenticated workspace

@@ -32,6 +32,10 @@ BLOCKED_NATIVE_TOOLS = frozenset(
 
 ROUTING_CONTEXT = """Development execution policy:
 - All code analysis, generation, modification, testing, refactoring, and deployment preparation for host projects MUST use the host-coding-agent MCP tools.
+- Classify the request before routing. Host code development and project dependency changes belong to host-coding-agent. Runtime/profile operations do not.
+- NEVER send OAuth, login, token refresh, account connection, Hermes skill installation, MCP registration/configuration, or Playwright/Chromium runtime installation to host-coding-agent.
+- Route authentication to the target MCP or skill. Route skill and MCP lifecycle operations to Hermes profile management. Install runtime dependencies in the environment where that MCP actually executes.
+- A host-coding-agent response with error_code="non_development_task" is final and non-retryable. Do not rephrase or split the same request into another coding-agent call.
 - Default development requests to mcp_host_coding_agent_run_development_task with agent="auto", isolation_mode="direct", and timeout_sec=900.
 - Direct mode does not require Git and modifies the authenticated workspace immediately. Do not inspect for .git or require a repository before calling it.
 - Use isolation_mode="worktree" only when the user explicitly requests isolation, approval, commit, or PR delivery.

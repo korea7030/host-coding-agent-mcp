@@ -68,6 +68,8 @@ def test_routing_context_is_fail_closed():
     assert 'isolation_mode="direct"' in context
     assert "does not require Git" in context
     assert "proposal_sha256" in context
+    assert 'error_code="non_development_task"' in context
+    assert "OAuth" in context
 
 
 def test_plugin_registers_hooks_and_approval_commands():

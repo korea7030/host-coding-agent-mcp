@@ -41,6 +41,7 @@ from host_coding_agent.proposals import (
 )
 from host_coding_agent.runner import run_managed_worktree_agent
 from host_coding_agent.runtime import RuntimeRegistry
+from host_coding_agent.task_classification import non_development_response
 from host_coding_agent.security import validate_task
 from host_coding_agent.testing import WorktreeTestError, run_managed_worktree_tests
 from host_coding_agent.worktrees import WorktreeError, WorktreeManager
@@ -541,6 +542,9 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         context: ExecutionContext | None = None,
     ) -> dict:
         """Run the complete isolated development workflow in one MCP call."""
+        rejected = non_development_response(task)
+        if rejected is not None:
+            return {**rejected, "stage": "classification"}
         stage = "create"
         job = None
         try:
@@ -912,6 +916,9 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         context: ExecutionContext | None = None,
     ) -> dict:
         """Run a host coding agent inside the configured workspace policy."""
+        rejected = non_development_response(task)
+        if rejected is not None:
+            return rejected
         try:
             return execute_profile_request(
                 task=task,
@@ -931,6 +938,9 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         assistant_id: str | None = None, context: ExecutionContext | None = None,
     ) -> dict:
         """Run Antigravity with direct writes; pass read_only for analysis only."""
+        rejected = non_development_response(task)
+        if rejected is not None:
+            return rejected
         try:
             if mode != RunMode.read_only:
                 return execute_direct_task(
@@ -954,6 +964,9 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         assistant_id: str | None = None, context: ExecutionContext | None = None,
     ) -> dict:
         """Run Codex with direct writes; pass read_only for analysis only."""
+        rejected = non_development_response(task)
+        if rejected is not None:
+            return rejected
         try:
             if mode != RunMode.read_only:
                 return execute_direct_task(
@@ -977,6 +990,9 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         assistant_id: str | None = None, context: ExecutionContext | None = None,
     ) -> dict:
         """Run OpenCode with direct writes; pass read_only for analysis only."""
+        rejected = non_development_response(task)
+        if rejected is not None:
+            return rejected
         try:
             if mode != RunMode.read_only:
                 return execute_direct_task(
