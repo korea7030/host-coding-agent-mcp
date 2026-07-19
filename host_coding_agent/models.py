@@ -195,6 +195,9 @@ class RunResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     ok: bool
     selected_agent: AgentName | None = None
+    requested_agent: AgentName | None = None
+    selection_mode: str = "explicit"
+    candidate_agents: list[AgentName] = Field(default_factory=list)
     assistant_id: str | None = None
     context: ExecutionContext | None = None
     cwd: Path

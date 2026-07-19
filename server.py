@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import contextvars
+import hashlib
 import re
 from pathlib import Path
 
@@ -29,12 +31,14 @@ from host_coding_agent.automated_delivery import (
 )
 from host_coding_agent.config import validate_profile_cwd
 from host_coding_agent.delivery import ManualDelivery, ManualDeliveryError
+from host_coding_agent.jobs import JobError, JobStore
 from host_coding_agent.models import DeliveryMode, IsolationMode, WorktreeStatus
 from host_coding_agent.profiles import (
     authenticated_profile,
     merge_context,
     resolve_profile_request,
 )
+from host_coding_agent.progress import emit_progress, progress_events
 from host_coding_agent.proposals import (
     WorktreeProposalError,
     create_managed_worktree_proposal,
@@ -60,6 +64,10 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         max_diff_chars=config.artifacts.max_diff_chars,
     )
     approval_store = ApprovalStore(artifact_path)
+    job_store = JobStore(
+        artifact_path.with_name("jobs.db"),
+        max_workers=2,
+    )
     runtime_registry = RuntimeRegistry(
         config,
         state_path=artifact_path.with_name("runtimes.json"),
@@ -480,8 +488,18 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
 
     @mcp.tool
     def check_host_coding_agents() -> dict:
-        """Check whether configured host coding-agent CLIs are available."""
-        return check_agents(config)
+        """Discover configured host CLIs and agents selectable by this profile."""
+        try:
+            allowed_agents = None
+            profile_name = None
+            if config.auth.enabled:
+                profile_name = request_profile()
+                allowed_agents = set(config.profiles[profile_name].allowed_agents)
+            result = check_agents(config, allowed_agents=allowed_agents)
+            result["profile"] = profile_name
+            return result
+        except (ConfigError, SecurityViolation, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
 
     @mcp.tool
     def get_patch_proposal(proposal_id: str) -> dict:
@@ -541,7 +559,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         assistant_id: str | None = None,
         context: ExecutionContext | None = None,
     ) -> dict:
-        """Run the complete isolated development workflow in one MCP call."""
+        """Run development after discovery; pass an explicit agent when user-selected."""
         rejected = non_development_response(task)
         if rejected is not None:
             return {**rejected, "stage": "classification"}
@@ -582,6 +600,11 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                 delivery_mode=delivery_mode,
                 assistant_id=assistant_id,
             )
+            emit_progress(
+                "create",
+                "Managed worktree created",
+                {"job_id": job.job_id, "repository": str(job.repository)},
+            )
             stage = "agent"
             run_result = run_managed_worktree_agent(
                 manager=worktree_manager,
@@ -606,6 +629,11 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
             if run_result.selected_agent is None:
                 raise WorktreeError("coding agent result did not identify an agent")
             stage = "test"
+            emit_progress(
+                "test",
+                "Running trusted project tests",
+                {"job_id": job.job_id},
+            )
             test_result = run_managed_worktree_tests(
                 manager=worktree_manager,
                 job_id=job.job_id,
@@ -626,6 +654,11 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                     ),
                 }
             stage = "proposal"
+            emit_progress(
+                "proposal",
+                "Creating immutable patch proposal",
+                {"job_id": job.job_id},
+            )
             proposal_result = create_managed_worktree_proposal(
                 manager=worktree_manager,
                 proposals=proposal_store,
@@ -660,6 +693,11 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                     "isolation_mode": IsolationMode.worktree.value,
                 }
             stage = "delivery"
+            emit_progress(
+                "delivery",
+                "Delivering tested changes",
+                {"job_id": job.job_id, "delivery_mode": delivery_mode.value},
+            )
             delivery_result = automated_delivery.deliver(
                 job_id=job.job_id,
                 profile=profile_name,
@@ -708,6 +746,139 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                 except WorktreeError:
                     pass
             return response
+
+    @mcp.tool
+    def start_development_task(
+        task: str,
+        cwd: str | None = None,
+        agent: AgentName | None = None,
+        delivery_mode: DeliveryMode = DeliveryMode.manual,
+        isolation_mode: IsolationMode | None = None,
+        timeout_sec: int = 900,
+        assistant_id: str | None = None,
+        context: ExecutionContext | None = None,
+    ) -> dict:
+        """Queue development and immediately return a job_id for polling."""
+        rejected = non_development_response(task)
+        if rejected is not None:
+            return {**rejected, "stage": "classification"}
+        try:
+            profile_name, profile = development_profile(assistant_id)
+            selected_agent = agent or profile.default_agent
+            if (
+                selected_agent != AgentName.auto
+                and selected_agent not in profile.allowed_agents
+            ):
+                raise SecurityViolation("agent is not allowed for this profile")
+            validate_task(task)
+            request_context = contextvars.copy_context()
+            task_hash = "sha256:" + hashlib.sha256(task.encode()).hexdigest()
+
+            def worker(emit):
+                emit(
+                    "workflow",
+                    "Development workflow started",
+                    {"agent": selected_agent.value},
+                )
+                def execute_with_progress():
+                    with progress_events(emit):
+                        return run_development_task(
+                            task=task,
+                            cwd=cwd,
+                            agent=selected_agent,
+                            delivery_mode=delivery_mode,
+                            isolation_mode=isolation_mode,
+                            timeout_sec=timeout_sec,
+                            assistant_id=assistant_id,
+                            context=context,
+                        )
+
+                result = request_context.run(execute_with_progress)
+                emit(
+                    result.get("stage", "completed"),
+                    "Development workflow completed",
+                    {"ok": bool(result.get("ok"))},
+                )
+                return result
+
+            job = job_store.submit(
+                profile=profile_name,
+                kind="development_task",
+                metadata={
+                    "task_hash": task_hash,
+                    "requested_agent": selected_agent.value,
+                    "delivery_mode": delivery_mode.value,
+                    "isolation_mode": (
+                        isolation_mode or profile.default_isolation_mode
+                    ).value,
+                    "timeout_sec": max(
+                        1,
+                        min(timeout_sec, config.security.max_timeout_sec),
+                    ),
+                },
+                worker=worker,
+            )
+            return {
+                "ok": True,
+                "job_id": job["job_id"],
+                "status": job["status"],
+                "stage": job["stage"],
+                "poll_with": "get_async_job",
+                "events_with": "get_async_job_events",
+            }
+        except (
+            ConfigError,
+            JobError,
+            SecurityViolation,
+            ValueError,
+        ) as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @mcp.tool
+    def get_async_job(
+        job_id: str,
+        assistant_id: str | None = None,
+    ) -> dict:
+        """Poll asynchronous job status, stage, timestamps, and final result."""
+        try:
+            profile_name, _ = development_profile(assistant_id)
+            return {"ok": True, "job": job_store.get(job_id, profile_name)}
+        except (ConfigError, JobError, SecurityViolation, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @mcp.tool
+    def get_async_job_events(
+        job_id: str,
+        after: int = 0,
+        limit: int = 100,
+        assistant_id: str | None = None,
+    ) -> dict:
+        """Poll ordered progress events after a sequence cursor."""
+        try:
+            profile_name, _ = development_profile(assistant_id)
+            return {
+                "ok": True,
+                **job_store.events(
+                    job_id,
+                    profile_name,
+                    after=after,
+                    limit=limit,
+                ),
+            }
+        except (ConfigError, JobError, SecurityViolation, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @mcp.tool
+    def list_async_jobs(
+        limit: int = 20,
+        assistant_id: str | None = None,
+    ) -> dict:
+        """List asynchronous jobs owned by the authenticated profile."""
+        try:
+            profile_name, _ = development_profile(assistant_id)
+            return {"ok": True, "jobs": job_store.list(profile_name, limit=limit)}
+        except (ConfigError, JobError, SecurityViolation, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
 
     @mcp.tool
     def run_development_job(
@@ -915,7 +1086,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         assistant_id: str | None = None,
         context: ExecutionContext | None = None,
     ) -> dict:
-        """Run a host coding agent inside the configured workspace policy."""
+        """Run a host agent; discover first and pass agent explicitly when selected."""
         rejected = non_development_response(task)
         if rejected is not None:
             return rejected

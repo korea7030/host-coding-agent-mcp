@@ -8,11 +8,13 @@ import shutil
 import signal
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
 from .config import ConfigError, validate_cwd
 from .models import AgentName, AppConfig, AttemptResult, ExecutionContext, RunMode, RunResult
+from .progress import emit_progress
 from .routing import route_agents
 from .security import SecurityViolation, redact, validate_task
 
@@ -85,26 +87,96 @@ def _resolve_command(command: str) -> str | None:
     return str(Path(found).resolve()) if found and Path(found).is_file() else None
 
 
-def check_agents(config: AppConfig) -> dict:
+def _probe_agent(name: AgentName, config: AppConfig) -> tuple[AgentName, dict]:
+    agent = config.agents[name]
+    path = _resolve_command(agent.command)
+    version = ""
+    version_ok = False
+    probe_error: str | None = None
+    if path:
+        try:
+            completed = subprocess.run(
+                [path, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+            version = redact((completed.stdout or completed.stderr).strip(), 1000)[0]
+            version_ok = completed.returncode == 0
+            if not version_ok:
+                probe_error = f"version probe exited with code {completed.returncode}"
+        except subprocess.TimeoutExpired:
+            probe_error = "version probe timed out"
+        except OSError as exc:
+            probe_error = redact(str(exc), 1000)[0]
+    installed = path is not None
+    selectable = agent.enabled and installed
+    if not agent.enabled:
+        reason = "disabled by server configuration"
+    elif not installed:
+        reason = "configured command was not found"
+    else:
+        reason = None
+    return name, {
+        "name": name.value,
+        "configured": True,
+        "enabled": agent.enabled,
+        "installed": installed,
+        "available": installed,
+        "selectable": selectable,
+        "path": path,
+        "version": version,
+        "version_ok": version_ok,
+        "probe_error": probe_error,
+        "unavailable_reason": reason,
+        "priority": agent.priority,
+    }
+
+
+def check_agents(
+    config: AppConfig,
+    *,
+    allowed_agents: set[AgentName] | None = None,
+) -> dict:
+    configured = list(config.agents)
+    probed: dict[AgentName, dict] = {}
+    if configured:
+        with ThreadPoolExecutor(max_workers=min(len(configured), 8)) as executor:
+            for name, details in executor.map(
+                lambda item: _probe_agent(item, config),
+                configured,
+            ):
+                probed[name] = details
+
     tools: dict[str, dict] = {}
-    for name, agent in config.agents.items():
-        path = _resolve_command(agent.command)
-        version = ""
-        if path:
-            try:
-                completed = subprocess.run(
-                    [path, "--version"], capture_output=True, text=True, timeout=10, check=False
-                )
-                version = redact((completed.stdout or completed.stderr).strip(), 1000)[0]
-            except (OSError, subprocess.TimeoutExpired):
-                pass
-        tools[name.value] = {
-            "enabled": agent.enabled,
-            "available": bool(path),
-            "path": path,
-            "version": version,
-        }
-    return {"ok": True, "tools": tools}
+    for name in configured:
+        details = probed[name]
+        profile_allowed = allowed_agents is None or name in allowed_agents
+        details["profile_allowed"] = profile_allowed
+        if not profile_allowed:
+            details["selectable"] = False
+            details["unavailable_reason"] = "not allowed for authenticated profile"
+        tools[name.value] = details
+
+    selectable_agents = [
+        name.value
+        for name in config.routing.default_order
+        if name in probed and probed[name]["selectable"]
+    ]
+    selectable_agents.extend(
+        name.value
+        for name in configured
+        if probed[name]["selectable"] and name.value not in selectable_agents
+    )
+    return {
+        "ok": True,
+        "agents": [tools[name.value] for name in configured],
+        "tools": tools,
+        "selectable_agents": selectable_agents,
+        "selection_required": True,
+        "auto_supported": True,
+    }
 
 
 def _prompt(
@@ -246,6 +318,11 @@ def _run_attempt(
     assistant_id: str | None = None,
     context: ExecutionContext | None = None,
 ) -> AttemptResult:
+    emit_progress(
+        "agent_attempt",
+        f"Starting {agent.value} coding agent",
+        {"agent": agent.value, "mode": mode.value, "timeout_sec": timeout_sec},
+    )
     command, stdin_prompt = _build_command(
         agent, task, mode, cwd, config, assistant_id, context
     )
@@ -282,7 +359,7 @@ def _run_attempt(
         stdout, stderr = process.communicate()
     stdout, redacted_out = redact(stdout, config.security.max_output_chars)
     stderr, redacted_err = redact(stderr, min(config.security.max_output_chars, 20_000))
-    return AttemptResult(
+    result = AttemptResult(
         agent=agent,
         ok=process.returncode == 0 and not timed_out,
         returncode=process.returncode,
@@ -292,6 +369,18 @@ def _run_attempt(
         timed_out=timed_out,
         command=command,
     )
+    emit_progress(
+        "agent_attempt",
+        f"Finished {agent.value} coding agent",
+        {
+            "agent": agent.value,
+            "ok": result.ok,
+            "returncode": result.returncode,
+            "timed_out": result.timed_out,
+            "duration_sec": result.duration_sec,
+        },
+    )
+    return result
 
 
 def _extract_diff(text: str) -> str:
@@ -371,6 +460,14 @@ def run_coding_agent(
     candidates = route_agents(task, agent, config)
     if allowed_agents is not None:
         candidates = [item for item in candidates if item in allowed_agents]
+    emit_progress(
+        "agent_routing",
+        "Coding agent candidates resolved",
+        {
+            "requested_agent": agent.value,
+            "candidates": [item.value for item in candidates],
+        },
+    )
     _audit(
         config,
         {
@@ -411,6 +508,9 @@ def run_coding_agent(
     result = RunResult(
         ok=selected is not None,
         selected_agent=selected,
+        requested_agent=agent,
+        selection_mode="automatic" if agent == AgentName.auto else "explicit",
+        candidate_agents=candidates,
         assistant_id=assistant_id,
         context=context,
         cwd=canonical_cwd,
@@ -503,6 +603,15 @@ def run_managed_worktree_agent(
     candidates = route_agents(task, agent, config)
     if allowed_agents is not None:
         candidates = [item for item in candidates if item in allowed_agents]
+    emit_progress(
+        "agent_routing",
+        "Managed worktree agent candidates resolved",
+        {
+            "requested_agent": agent.value,
+            "candidates": [item.value for item in candidates],
+            "job_id": job_id,
+        },
+    )
     for candidate in candidates:
         remaining = timeout_sec - int(time.monotonic() - started)
         if remaining <= 0:

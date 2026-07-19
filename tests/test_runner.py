@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from host_coding_agent.models import AgentName, AttemptResult, ExecutionContext, RunMode
+from host_coding_agent.progress import progress_events
 from host_coding_agent.runner import (
     OPENCODE_READONLY_CONFIG,
     OPENCODE_WORKTREE_CONFIG,
@@ -9,9 +10,97 @@ from host_coding_agent.runner import (
     _build_command,
     _extract_diff,
     _prompt,
+    check_agents,
     run_coding_agent,
     run_managed_worktree_agent,
 )
+
+
+def test_agent_attempt_emits_start_and_finish_progress(config, monkeypatch):
+    events = []
+
+    class FakeProcess:
+        pid = 123
+        returncode = 0
+
+        def communicate(self, prompt, timeout):
+            return "done", ""
+
+    monkeypatch.setattr("host_coding_agent.runner.subprocess.Popen", lambda *args, **kwargs: FakeProcess())
+    with progress_events(lambda stage, message, details=None: events.append((stage, message, details))):
+        from host_coding_agent.runner import _run_attempt
+
+        result = _run_attempt(
+            AgentName.codex,
+            "inspect",
+            RunMode.read_only,
+            config.security.allowed_roots[0],
+            30,
+            config,
+        )
+
+    assert result.ok
+    assert [message for _, message, _ in events] == [
+        "Starting codex coding agent",
+        "Finished codex coding agent",
+    ]
+    assert events[-1][2]["returncode"] == 0
+    assert events[-1][2]["timed_out"] is False
+
+
+def test_agent_discovery_reports_installation_selection_and_profile_policy(
+    config, monkeypatch
+):
+    def fake_probe(name, app_config):
+        enabled = app_config.agents[name].enabled
+        installed = name != AgentName.opencode
+        return name, {
+            "name": name.value,
+            "configured": True,
+            "enabled": enabled,
+            "installed": installed,
+            "available": installed,
+            "selectable": enabled and installed,
+            "path": f"/tools/{name.value}" if installed else None,
+            "version": "1.2.3" if installed else "",
+            "version_ok": installed,
+            "probe_error": None,
+            "unavailable_reason": None if installed else "configured command was not found",
+            "priority": app_config.agents[name].priority,
+        }
+
+    monkeypatch.setattr("host_coding_agent.runner._probe_agent", fake_probe)
+    result = check_agents(config, allowed_agents={AgentName.codex, AgentName.opencode})
+
+    assert result["selection_required"] is True
+    assert result["auto_supported"] is True
+    assert result["selectable_agents"] == ["codex"]
+    assert result["tools"]["antigravity"]["installed"] is True
+    assert result["tools"]["antigravity"]["profile_allowed"] is False
+    assert result["tools"]["antigravity"]["selectable"] is False
+    assert result["tools"]["opencode"]["installed"] is False
+    assert result["tools"]["opencode"]["selectable"] is False
+
+
+def test_agent_discovery_probes_versions_in_parallel(config, monkeypatch):
+    calls = []
+
+    class Completed:
+        returncode = 0
+        stdout = "agent 9.9.9\n"
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return Completed()
+
+    monkeypatch.setattr("host_coding_agent.runner.subprocess.run", fake_run)
+    result = check_agents(config)
+
+    assert result["selectable_agents"] == ["antigravity", "codex", "opencode"]
+    assert len(calls) == 3
+    assert all(kwargs["timeout"] == 3 for _, kwargs in calls)
+    assert all(item["version"] == "agent 9.9.9" for item in result["agents"])
 
 
 def test_extracts_codex_agent_message():
@@ -128,6 +217,9 @@ def test_run_result_echoes_context_and_audit_only_stores_context_hash(
     assert started_audit["timeout_sec"] == 30
     assert result.assistant_id == "dev-bot"
     assert result.context == context
+    assert result.requested_agent == AgentName.codex
+    assert result.selection_mode == "explicit"
+    assert result.candidate_agents == [AgentName.codex]
     assert audit["assistant_id"] == "dev-bot"
     assert audit["context_hash"].startswith("sha256:")
     assert "context" not in audit
@@ -152,6 +244,9 @@ def test_auto_routing_is_limited_to_profile_allowed_agents(config, monkeypatch):
     )
 
     assert result.ok
+    assert result.requested_agent == AgentName.auto
+    assert result.selection_mode == "automatic"
+    assert result.candidate_agents == [AgentName.codex]
     assert attempted == [AgentName.codex]
 
 

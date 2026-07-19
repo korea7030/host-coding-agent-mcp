@@ -12,3 +12,4 @@ artifacts/runtimes.json
 !.env.example
 tokens.env
 .DS_Store
+.juggler/

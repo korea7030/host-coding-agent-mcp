@@ -41,6 +41,10 @@ def _repository(root: Path, *, remote_url: str | None = None) -> Path:
         ["git", "-C", str(repository), "commit", "-qm", "base"],
         check=True,
     )
+    subprocess.run(
+        ["git", "-C", str(repository), "branch", "-M", "master"],
+        check=True,
+    )
     if remote_url:
         subprocess.run(
             ["git", "-C", str(repository), "remote", "add", "origin", remote_url],
