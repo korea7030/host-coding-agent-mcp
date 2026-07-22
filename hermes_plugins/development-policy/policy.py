@@ -53,6 +53,46 @@ _telegram_command_context: contextvars.ContextVar[tuple[str, str] | None] = (
 _last_runtime_registration = 0.0
 
 
+def _read_env_value(path: Path, key: str) -> str:
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return ""
+    prefix = f"{key}="
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if not stripped.startswith(prefix):
+            continue
+        value = stripped[len(prefix):].strip()
+        if (
+            len(value) >= 2
+            and value[0] == value[-1]
+            and value[0] in {"'", '"'}
+        ):
+            value = value[1:-1]
+        return value
+    return ""
+
+
+def host_coding_agent_token() -> str:
+    token = os.environ.get("MCP_HOST_CODING_AGENT_API_KEY", "")
+    if token:
+        return token
+    hermes_home = Path(
+        os.environ.get("HERMES_HOME")
+        or os.environ.get("HOME", "")
+        or "/opt/data"
+    )
+    candidates = []
+    for env_file in sorted((hermes_home / "profiles").glob("*/.env")):
+        value = _read_env_value(env_file, "MCP_HOST_CODING_AGENT_API_KEY")
+        if value:
+            candidates.append(value)
+    return candidates[0] if len(candidates) == 1 else ""
+
+
 def register_runtime(*, force: bool = False) -> None:
     global _last_runtime_registration
     if not Path("/.dockerenv").exists():
@@ -60,7 +100,7 @@ def register_runtime(*, force: bool = False) -> None:
     now = time.monotonic()
     if not force and now - _last_runtime_registration < 20:
         return
-    token = os.environ.get("MCP_HOST_CODING_AGENT_API_KEY", "")
+    token = host_coding_agent_token()
     if not token:
         return
     try:
@@ -130,7 +170,7 @@ def _approval_request(action: str, raw_args: str) -> dict[str, Any]:
     }
     if required == 2:
         payload["proposal_sha256"] = parts[1]
-    token = os.environ.get("MCP_HOST_CODING_AGENT_API_KEY", "")
+    token = host_coding_agent_token()
     if not token:
         raise ValueError("MCP approval credential is unavailable")
     request = urllib.request.Request(

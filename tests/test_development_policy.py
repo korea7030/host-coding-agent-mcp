@@ -134,6 +134,50 @@ def test_gateway_hook_captures_telegram_identity_for_approval(monkeypatch):
     assert captured["timeout"] == 60
 
 
+def test_host_coding_agent_token_falls_back_to_profile_env(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.delenv("MCP_HOST_CODING_AGENT_API_KEY", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    profile = tmp_path / "profiles" / "invest-bot"
+    profile.mkdir(parents=True)
+    (profile / ".env").write_text(
+        "OTHER=value\nMCP_HOST_CODING_AGENT_API_KEY=abc123\n"
+    )
+
+    assert policy.host_coding_agent_token() == "abc123"
+
+
+def test_host_coding_agent_token_prefers_process_environment(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("MCP_HOST_CODING_AGENT_API_KEY", "from-env")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    profile = tmp_path / "profiles" / "invest-bot"
+    profile.mkdir(parents=True)
+    (profile / ".env").write_text("MCP_HOST_CODING_AGENT_API_KEY=from-file\n")
+
+    assert policy.host_coding_agent_token() == "from-env"
+
+
+def test_host_coding_agent_token_rejects_ambiguous_profile_envs(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.delenv("MCP_HOST_CODING_AGENT_API_KEY", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    for name in ("invest-bot", "research-bot"):
+        profile = tmp_path / "profiles" / name
+        profile.mkdir(parents=True)
+        (profile / ".env").write_text(
+            f"MCP_HOST_CODING_AGENT_API_KEY={name}-token\n"
+        )
+
+    assert policy.host_coding_agent_token() == ""
+
+
 def test_plugin_command_returns_error_instead_of_falling_through_unknown():
     policy._telegram_command_context.set(None)
 
