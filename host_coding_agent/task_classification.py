@@ -8,6 +8,9 @@ from dataclasses import dataclass
 class NonDevelopmentTask:
     category: str
     suggested_route: str
+    task_owner: str
+    recommended_next_action: str
+    examples: tuple[str, ...]
 
 
 _AUTHENTICATION = re.compile(
@@ -41,22 +44,58 @@ def classify_non_development_task(task: str) -> NonDevelopmentTask | None:
         return NonDevelopmentTask(
             category="authentication",
             suggested_route="Use the target MCP or skill authentication flow.",
+            task_owner="target_mcp_or_profile_runtime",
+            recommended_next_action=(
+                "Run the OAuth/login/token refresh flow in the target MCP, "
+                "Hermes profile runtime, or connected service UI."
+            ),
+            examples=(
+                "Use the Google/Fanding MCP auth command or connection flow.",
+                "Refresh credentials in the Hermes profile runtime, not through a coding agent.",
+            ),
         )
     if _SKILL_MANAGEMENT.search(task):
         return NonDevelopmentTask(
             category="skill_management",
             suggested_route="Use the Hermes profile skill manager.",
+            task_owner="hermes_profile_management",
+            recommended_next_action=(
+                "Install, enable, disable, or remove skills through the Hermes "
+                "profile skill management flow."
+            ),
+            examples=(
+                "Use the Hermes skill install/configuration command for this profile.",
+                "Do not install profile skills inside the project workspace.",
+            ),
         )
     if _MCP_MANAGEMENT.search(task):
         return NonDevelopmentTask(
             category="mcp_management",
             suggested_route="Use the Hermes profile MCP configuration manager.",
+            task_owner="hermes_profile_management",
+            recommended_next_action=(
+                "Register, connect, enable, disable, or remove MCP servers through "
+                "Hermes profile configuration."
+            ),
+            examples=(
+                "Update the Hermes profile MCP server configuration.",
+                "Restart or reload the Hermes profile runtime after MCP configuration changes.",
+            ),
         )
     if _RUNTIME_BROWSER_INSTALL.search(task):
         return NonDevelopmentTask(
             category="runtime_dependency",
             suggested_route=(
                 "Install the browser in the runtime where the target MCP executes."
+            ),
+            task_owner="profile_runtime_operations",
+            recommended_next_action=(
+                "Install runtime dependencies in the container or host runtime that "
+                "executes the target MCP."
+            ),
+            examples=(
+                "Install Playwright browsers in the MCP runtime container.",
+                "Do not treat runtime browser installation as a source-code patch.",
             ),
         )
     return None
@@ -75,5 +114,9 @@ def non_development_response(task: str) -> dict[str, object] | None:
             "development. The host-coding-agent MCP did not execute it."
         ),
         "suggested_route": classification.suggested_route,
+        "task_owner": classification.task_owner,
+        "recommended_next_action": classification.recommended_next_action,
+        "do_not_retry_with_host_coding_agent": True,
+        "examples": list(classification.examples),
         "retryable": False,
     }

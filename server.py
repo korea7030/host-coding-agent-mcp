@@ -125,6 +125,79 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
             f"{normalize_proposal_sha256(proposal_sha256)}"
         )
 
+    def proposal_status_payload(
+        *,
+        proposal_status: str,
+        approval_status: str | None = None,
+        apply_command: str | None = None,
+    ) -> dict[str, object]:
+        applied = proposal_status == "applied" or approval_status == "applied"
+        requires_approval = proposal_status == "proposed" or approval_status == "pending"
+        if applied:
+            message = "Proposal applied to the original workspace."
+        elif proposal_status == "rejected" or approval_status == "rejected":
+            message = "Proposal rejected and not applied."
+        elif requires_approval:
+            if apply_command:
+                message = (
+                    "Proposal created but not applied. "
+                    f"Use {apply_command} to apply."
+                )
+            else:
+                message = "Proposal created but not applied. Approval is required to apply."
+        elif proposal_status == "delivered":
+            message = "Proposal delivered by the configured delivery mode."
+        else:
+            message = f"Proposal status: {proposal_status}."
+        payload: dict[str, object] = {
+            "proposal_status": proposal_status,
+            "requires_approval": requires_approval,
+            "applied": applied,
+            "message": message,
+        }
+        if approval_status is not None:
+            payload["approval_status"] = approval_status
+        return payload
+
+    def approval_status_payload(approval: dict[str, object]) -> dict[str, object]:
+        status = str(approval.get("status", "unknown"))
+        proposal_status = {
+            "pending": "proposed",
+            "approved": "approved",
+            "applied": "applied",
+            "rejected": "rejected",
+        }.get(status, status)
+        return proposal_status_payload(
+            proposal_status=proposal_status,
+            approval_status=status,
+        )
+
+    def path_mapping_payload(
+        *,
+        requested_cwd: str | None,
+        resolved_cwd: str | Path | None,
+        worktree_cwd: str | Path | None = None,
+    ) -> dict:
+        resolved_text = str(resolved_cwd) if resolved_cwd is not None else None
+        worktree_text = str(worktree_cwd) if worktree_cwd is not None else None
+        mapped = (
+            requested_cwd is not None
+            and resolved_text is not None
+            and Path(requested_cwd) != Path(resolved_text)
+        )
+        return {
+            "requested_cwd": requested_cwd,
+            "resolved_cwd": resolved_text,
+            "cwd": worktree_text or resolved_text,
+            "worktree_cwd": worktree_text,
+            "path_mapping_applied": mapped,
+            "path_mapping_note": (
+                "Resolved host cwd is expected when the caller passes a Docker container path."
+                if mapped
+                else None
+            ),
+        }
+
     def isolation_delivery_validation_error(
         *,
         isolation_mode: IsolationMode,
@@ -238,7 +311,14 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                 approval_store.create_pending(proposal)
             except (ApprovalError, ArtifactError) as exc:
                 result.artifact_error = str(exc)
-        return result.model_dump(mode="json")
+        payload = result.model_dump(mode="json")
+        payload.update(
+            path_mapping_payload(
+                requested_cwd=result.requested_cwd,
+                resolved_cwd=result.cwd,
+            )
+        )
+        return payload
 
     def request_profile() -> str:
         if not config.auth.enabled:
@@ -374,7 +454,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
             and bool(changed)
         )
         ok = result.ok and not write_policy_violated
-        return {
+        payload = {
             "ok": ok,
             "stage": "completed" if ok else "direct",
             "isolation_mode": IsolationMode.direct.value,
@@ -393,7 +473,6 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                 if result.selected_agent
                 else None
             ),
-            "cwd": str(result.cwd),
             "summary": result.summary,
             "error": (
                 "direct_write_policy=fail_if_changed was violated; files changed in direct mode"
@@ -401,6 +480,13 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                 else result.error
             ),
         }
+        payload.update(
+            path_mapping_payload(
+                requested_cwd=requested_cwd,
+                resolved_cwd=result.cwd,
+            )
+        )
+        return payload
 
     @mcp.custom_route(
         "/runtime/register",
@@ -459,6 +545,10 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                     status_code=403,
                 )
             if action == "show":
+                approval = approval_store.get_for_proposal(
+                    proposal_id,
+                    profile=profile_name,
+                )
                 return JSONResponse(
                     {
                         "ok": True,
@@ -466,10 +556,8 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                             proposal_id,
                             profile=profile_name,
                         ),
-                        "approval": approval_store.get_for_proposal(
-                            proposal_id,
-                            profile=profile_name,
-                        ),
+                        "approval": approval,
+                        **approval_status_payload(approval),
                     }
                 )
             if action == "reject":
@@ -481,7 +569,11 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                     decided_by=actor,
                     decision_channel="telegram",
                 )
-                response = {"ok": True, "approval": approval}
+                response = {
+                    "ok": True,
+                    "approval": approval,
+                    **approval_status_payload(approval),
+                }
                 found = worktree_manager.find_by_proposal(
                     proposal_id,
                     profile=profile_name,
@@ -523,21 +615,31 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                     proposal_id=proposal_id,
                     profile=profile_name,
                 ):
-                    return JSONResponse(
-                        manual_delivery.deliver(
-                            proposal_id=proposal_id,
-                            profile=profile_name,
-                            proposal_sha256=proposal_sha256,
-                        )
-                    )
-                if approval["status"] != "approved":
-                    raise ApprovalError("approved request not found")
-                return JSONResponse(
-                    patch_applier.apply(
+                    delivery_response = manual_delivery.deliver(
                         proposal_id=proposal_id,
                         profile=profile_name,
                         proposal_sha256=proposal_sha256,
                     )
+                    return JSONResponse(
+                        {
+                            **delivery_response,
+                            **approval_status_payload(
+                                delivery_response.get("approval", approval)
+                            ),
+                        }
+                    )
+                if approval["status"] != "approved":
+                    raise ApprovalError("approved request not found")
+                apply_response = patch_applier.apply(
+                    proposal_id=proposal_id,
+                    profile=profile_name,
+                    proposal_sha256=proposal_sha256,
+                )
+                return JSONResponse(
+                    {
+                        **apply_response,
+                        **approval_status_payload(apply_response["approval"]),
+                    }
                 )
             return JSONResponse(
                 {"ok": False, "error": "unknown action"},
@@ -716,6 +818,11 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                 delivery_mode=delivery_mode,
                 assistant_id=assistant_id,
             )
+            worktree_path_payload = path_mapping_payload(
+                requested_cwd=cwd or str(profile.default_cwd),
+                resolved_cwd=job.repository,
+                worktree_cwd=job.worktree,
+            )
             emit_progress(
                 "create",
                 "Managed worktree created",
@@ -741,6 +848,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                     "job_id": job.job_id,
                     "status": WorktreeStatus.failed.value,
                     "error": run_result.error,
+                    **worktree_path_payload,
                 }
             if run_result.selected_agent is None:
                 raise WorktreeError("coding agent result did not identify an agent")
@@ -768,6 +876,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                         if test_result.results
                         else None
                     ),
+                    **worktree_path_payload,
                 }
             stage = "proposal"
             emit_progress(
@@ -790,8 +899,13 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                     "job_id": job.job_id,
                     "status": WorktreeStatus.failed.value,
                     "error": proposal_result.error,
+                    **worktree_path_payload,
                 }
             if delivery_mode == DeliveryMode.manual:
+                apply_command = proposal_apply_command(
+                    proposal_result.proposal_id,
+                    proposal_result.proposal_sha256,
+                )
                 return {
                     "ok": True,
                     "stage": "awaiting_approval",
@@ -800,13 +914,16 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                     "selected_agent": run_result.selected_agent.value,
                     "proposal_id": proposal_result.proposal_id,
                     "proposal_sha256": proposal_result.proposal_sha256,
-                    "apply_command": proposal_apply_command(
-                        proposal_result.proposal_id,
-                        proposal_result.proposal_sha256,
-                    ),
+                    "apply_command": apply_command,
                     "changed_files": proposal_result.changed_files,
                     "requires_approval": True,
+                    **proposal_status_payload(
+                        proposal_status="proposed",
+                        approval_status="pending",
+                        apply_command=apply_command,
+                    ),
                     "isolation_mode": IsolationMode.worktree.value,
+                    **worktree_path_payload,
                 }
             stage = "delivery"
             emit_progress(
@@ -827,7 +944,9 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                 "proposal_sha256": proposal_result.proposal_sha256,
                 "changed_files": proposal_result.changed_files,
                 "test_commands": len(test_result.results),
+                **proposal_status_payload(proposal_status="delivered"),
                 "isolation_mode": IsolationMode.worktree.value,
+                **worktree_path_payload,
             }
         except (
             ApprovalError,
@@ -1038,7 +1157,15 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                 context=merge_context(profile.context, context),
                 allowed_agents=set(profile.allowed_agents),
             )
-            return result.model_dump(mode="json")
+            payload = result.model_dump(mode="json")
+            payload.update(
+                path_mapping_payload(
+                    requested_cwd=result.requested_cwd,
+                    resolved_cwd=result.requested_cwd,
+                    worktree_cwd=result.cwd,
+                )
+            )
+            return payload
         except (ConfigError, SecurityViolation, WorktreeError, ValueError) as exc:
             return {"ok": False, "error": str(exc)}
 
@@ -1086,7 +1213,23 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                 profile=profile_name,
                 agent=selected_agent,
             )
-            return result.model_dump(mode="json")
+            payload = result.model_dump(mode="json")
+            if result.ok and result.proposal_id and result.proposal_sha256:
+                apply_command = proposal_apply_command(
+                    result.proposal_id,
+                    result.proposal_sha256,
+                )
+                payload.update(
+                    {
+                        "apply_command": apply_command,
+                        **proposal_status_payload(
+                            proposal_status="proposed",
+                            approval_status="pending",
+                            apply_command=apply_command,
+                        ),
+                    }
+                )
+            return payload
         except (
             ArtifactError,
             ConfigError,
@@ -1112,6 +1255,10 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                         "ok": True,
                         "job_id": job_id,
                         "delivery_status": job.status.value,
+                        **proposal_status_payload(
+                            proposal_status="applied",
+                            approval_status="applied",
+                        ),
                     }
                 link = worktree_manager.get_proposal_link(
                     job_id,
@@ -1121,21 +1268,30 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                     link["proposal_id"],
                     profile=profile_name,
                 )
+                apply_command = proposal_apply_command(
+                    link["proposal_id"],
+                    link["proposal_sha256"],
+                )
                 return {
                     "ok": False,
                     "awaiting_approval": True,
                     "proposal_id": link["proposal_id"],
                     "proposal_sha256": link["proposal_sha256"],
-                    "apply_command": proposal_apply_command(
-                        link["proposal_id"],
-                        link["proposal_sha256"],
+                    "apply_command": apply_command,
+                    **proposal_status_payload(
+                        proposal_status="proposed",
+                        approval_status=str(approval["status"]),
+                        apply_command=apply_command,
                     ),
-                    "approval_status": approval["status"],
                 }
-            return automated_delivery.deliver(
+            delivery_response = automated_delivery.deliver(
                 job_id=job_id,
                 profile=profile_name,
             )
+            return {
+                **delivery_response,
+                **proposal_status_payload(proposal_status="delivered"),
+            }
         except (
             ApprovalError,
             AutomatedDeliveryError,

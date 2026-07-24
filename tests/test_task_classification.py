@@ -33,3 +33,7 @@ def test_rejection_is_structured_and_non_retryable():
     assert result is not None
     assert result["error_code"] == "non_development_task"
     assert result["retryable"] is False
+    assert result["do_not_retry_with_host_coding_agent"] is True
+    assert result["task_owner"] == "hermes_profile_management"
+    assert "Hermes profile" in result["recommended_next_action"]
+    assert result["examples"]

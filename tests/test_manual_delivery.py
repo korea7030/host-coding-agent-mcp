@@ -120,6 +120,9 @@ def test_manual_delivery_applies_and_cleans_worktree(config, tmp_path):
 
     assert result["ok"]
     assert result["delivery_status"] == "delivered"
+    assert result["proposal_status"] == "applied"
+    assert result["requires_approval"] is False
+    assert result["applied"] is True
     assert result["cleanup"]["ok"]
     assert (repository / "app.py").read_text() == "delivered\n"
     assert not job.worktree.exists()
@@ -184,6 +187,9 @@ def test_manual_delivery_is_idempotent_after_success(config, tmp_path):
 
     assert repeated["ok"]
     assert repeated["already_delivered"]
+    assert repeated["proposal_status"] == "applied"
+    assert repeated["requires_approval"] is False
+    assert repeated["applied"] is True
     assert repeated["cleanup"]["ok"]
 
 

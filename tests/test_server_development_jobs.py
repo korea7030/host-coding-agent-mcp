@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -127,6 +128,11 @@ async def test_single_call_direct_mode_modifies_non_git_workspace(
     assert data["direct_write_policy"] == "allow"
     assert data["changed_files"] == ["app.py"]
     assert data["changed_file_count"] == 1
+    assert data["requested_cwd"] == str(workspace)
+    assert data["resolved_cwd"] == str(workspace)
+    assert data["cwd"] == str(workspace)
+    assert data["worktree_cwd"] is None
+    assert data["path_mapping_applied"] is False
     assert (workspace / "app.py").read_text() == "directly modified\n"
     (workspace / "app.py").write_text("original again\n")
     compatibility = await mcp.call_tool(
@@ -207,6 +213,106 @@ async def test_direct_mode_can_fail_if_files_changed(
     assert data["error_code"] == "direct_write_policy_violation"
     assert data["changed_files"] == ["app.py"]
     assert (workspace / "app.py").read_text() == "modified despite read-only intent\n"
+
+
+@pytest.mark.asyncio
+async def test_direct_mode_reports_container_to_host_path_mapping(
+    config,
+    monkeypatch,
+    tmp_path: Path,
+):
+    mount_source = tmp_path / ".hermes-invest"
+    workspace = mount_source / "profiles" / "invest-bot" / "workspace"
+    workspace.mkdir(parents=True)
+    (workspace / "app.py").write_text("original\n")
+    config.auth.enabled = True
+    config.profiles["invest-bot"] = ProfileConfig(
+        token_env="TEST_INVEST_TOKEN",
+        allowed_roots=[],
+        allowed_container_roots=[
+            Path("/opt/data/profiles/invest-bot/workspace")
+        ],
+        runtime_labels={"com.docker.compose.service": "hermes-invest"},
+        allowed_agents=[AgentName.codex],
+        allowed_modes=[RunMode.propose_patch],
+        allowed_isolation_modes=[IsolationMode.direct],
+        default_isolation_mode=IsolationMode.direct,
+        default_cwd=Path("/opt/data/profiles/invest-bot/workspace"),
+        default_agent=AgentName.codex,
+    )
+    monkeypatch.setenv("TEST_INVEST_TOKEN", "i" * 32)
+    config.artifacts.path = tmp_path / "artifacts" / "proposals.db"
+    config.artifacts.path.parent.mkdir(parents=True)
+    config.worktrees.root = tmp_path / "worktrees"
+    config.worktrees.state_path = tmp_path / "artifacts" / "worktrees.db"
+    container_id = "a" * 64
+    (tmp_path / "artifacts" / "runtimes.json").write_text(
+        json.dumps({"invest-bot": container_id})
+    )
+    inspect_data = [
+        {
+            "Id": container_id,
+            "State": {"Running": True},
+            "Config": {
+                "Labels": {
+                    "com.docker.compose.service": "hermes-invest",
+                }
+            },
+            "Mounts": [
+                {
+                    "Type": "bind",
+                    "Source": str(mount_source),
+                    "Destination": "/opt/data",
+                    "RW": True,
+                }
+            ],
+        }
+    ]
+    monkeypatch.setattr("host_coding_agent.runtime.shutil.which", lambda _: "/usr/bin/docker")
+    monkeypatch.setattr(
+        "host_coding_agent.runtime.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0],
+            0,
+            stdout=json.dumps(inspect_data),
+            stderr="",
+        ),
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(config.model_dump(mode="json"), sort_keys=False)
+    )
+    monkeypatch.setattr(server, "get_access_token", lambda: _access_token("invest-bot"))
+
+    def fake_direct_agent(**kwargs):
+        return RunResult(
+            ok=True,
+            selected_agent=AgentName.codex,
+            assistant_id="invest-bot",
+            cwd=Path(kwargs["cwd"]),
+            mode=RunMode.apply_patch,
+            summary="checked",
+        )
+
+    monkeypatch.setattr(server, "execute_agent", fake_direct_agent)
+    mcp, _ = server.create_server(config_path)
+
+    result = await mcp.call_tool(
+        "run_development_task",
+        {
+            "task": "inspect",
+            "agent": "codex",
+            "isolation_mode": "direct",
+        },
+    )
+    data = result.structured_content
+
+    assert data["ok"] is True
+    assert data["requested_cwd"] == "/opt/data/profiles/invest-bot/workspace"
+    assert data["resolved_cwd"] == str(workspace)
+    assert data["cwd"] == str(workspace)
+    assert data["path_mapping_applied"] is True
+    assert "Docker container path" in data["path_mapping_note"]
 
 
 @pytest.mark.asyncio
@@ -388,6 +494,11 @@ async def test_single_call_development_workflow(
     assert data["stage"] == expected_stage
     assert data["selected_agent"] == "codex"
     assert data["proposal_sha256"].startswith("sha256:")
+    assert data["requested_cwd"] == str(repository)
+    assert data["resolved_cwd"] == str(repository)
+    assert data["worktree_cwd"]
+    assert data["cwd"] == data["worktree_cwd"]
+    assert data["path_mapping_applied"] is False
     assert (repository / "app.py").read_text() == "original\n"
     manager = WorktreeManager(
         root=config.worktrees.root,
@@ -399,6 +510,11 @@ async def test_single_call_development_workflow(
             f"/apply_proposal {data['proposal_id']} "
             f"{data['proposal_sha256']}"
         )
+        assert data["proposal_status"] == "proposed"
+        assert data["approval_status"] == "pending"
+        assert data["requires_approval"] is True
+        assert data["applied"] is False
+        assert "not applied" in data["message"]
         assert job.status == WorktreeStatus.proposed
         assert job.worktree.exists()
         approval = ApprovalStore(config.artifacts.path).get_for_proposal(
@@ -407,6 +523,9 @@ async def test_single_call_development_workflow(
         )
         assert approval["status"] == "pending"
     else:
+        assert data["proposal_status"] == "delivered"
+        assert data["requires_approval"] is False
+        assert data["applied"] is False
         assert job.status == WorktreeStatus.delivered
         assert not job.worktree.exists()
         assert subprocess.run(

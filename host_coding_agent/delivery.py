@@ -89,5 +89,9 @@ class ManualDelivery:
             **apply_result,
             "job_id": job.job_id,
             "delivery_status": WorktreeStatus.delivered.value,
+            "proposal_status": "applied",
+            "requires_approval": False,
+            "applied": True,
+            "message": "Proposal applied to the original workspace.",
             "cleanup": cleanup.model_dump(mode="json"),
         }

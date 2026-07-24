@@ -289,6 +289,8 @@ non-Git workspace:
 
 ### P1-3. 공통 path mapping response 정리
 
+Status: implemented.
+
 모든 실행 계열 tool 응답에 다음 필드를 일관되게 포함한다.
 
 ```json
@@ -310,13 +312,26 @@ non-Git workspace:
 - `run_antigravity`
 - `check_execution_health`
 
-### P1-4. Proposal 상태 응답 정리
+현재 구현:
+
+- legacy `run_coding_agent` 계열 응답은 `requested_cwd`, `resolved_cwd`, `cwd`,
+  `worktree_cwd`, `path_mapping_applied`, `path_mapping_note`를 포함한다.
+- direct mode 응답은 `requested_cwd`와 `resolved_cwd`를 분리하고 `cwd`는 실제 resolved
+  host workspace를 가리킨다.
+- worktree mode 응답은 `requested_cwd`, `resolved_cwd`와 별도로 실제 agent 실행 위치인
+  `worktree_cwd`를 반환한다. 이 경우 `cwd`는 `worktree_cwd`와 같다.
+- Docker container path가 host path로 변환되면 `path_mapping_applied=true`와
+  explanatory note가 함께 반환된다.
+
+### P1-4. Proposal 상태 응답 정리 — implemented
 
 manual worktree mode 응답에 문구와 상태를 강제한다.
 
 ```json
 {
   "status": "proposed",
+  "proposal_status": "proposed",
+  "approval_status": "pending",
   "requires_approval": true,
   "applied": false,
   "message": "Proposal created but not applied. Use /apply_proposal <id> <sha256> to apply."
@@ -334,7 +349,17 @@ manual worktree mode 응답에 문구와 상태를 강제한다.
 - proposal 생성 응답에서 "applied"로 해석될 수 있는 문구 금지
 - apply endpoint 성공 시에만 `applied=true`
 
-### P1-5. `non_development_task` 안내 개선
+구현:
+
+- `run_development_task` manual 응답은 `proposal_status=proposed`,
+  `approval_status=pending`, `requires_approval=true`, `applied=false`를 반환한다.
+- `/approval/telegram` show/reject/approve 응답은 proposal 상태 payload를 함께
+  반환한다.
+- `ManualDelivery.deliver` 성공/재시도 결과는 `proposal_status=applied`,
+  `applied=true`를 반환한다.
+- `deliver_development_job`은 manual approval 대기와 delivered 상태를 구분한다.
+
+### P1-5. `non_development_task` 안내 개선 — implemented
 
 현재 분류는 있다. 응답을 더 실용적으로 만든다.
 
@@ -356,6 +381,14 @@ manual worktree mode 응답에 문구와 상태를 강제한다.
 - OAuth/token refresh는 retryable false
 - MCP 설치는 runtime/profile route 안내
 - host project dependency 수정은 여전히 개발 작업으로 허용
+
+구현:
+
+- `non_development_response`는 `do_not_retry_with_host_coding_agent=true`를 반환한다.
+- category별 `task_owner`, `recommended_next_action`, `examples`를 반환한다.
+- Hermes/Telegram agent는 이 응답을 최종 실패로 처리하고 같은 요청을
+  `run_coding_agent`, `run_development_task`, `run_opencode` 등으로 재시도하지
+  않아야 한다.
 
 ## 6. P2 구현 계획
 

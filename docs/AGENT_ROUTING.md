@@ -118,6 +118,13 @@ Agent routing 전에 `host_coding_agent/task_classification.py`가 task를 먼�
   "ok": false,
   "error_code": "non_development_task",
   "category": "authentication",
+  "task_owner": "target_mcp_or_profile_runtime",
+  "recommended_next_action": "Run the OAuth/login/token refresh flow in the target MCP, Hermes profile runtime, or connected service UI.",
+  "do_not_retry_with_host_coding_agent": true,
+  "examples": [
+    "Use the Google/Fanding MCP auth command or connection flow.",
+    "Refresh credentials in the Hermes profile runtime, not through a coding agent."
+  ],
   "retryable": false
 }
 ```

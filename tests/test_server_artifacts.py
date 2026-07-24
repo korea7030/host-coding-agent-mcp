@@ -52,6 +52,11 @@ async def test_propose_patch_result_is_stored_and_exposed_by_mcp(
     )
     run_data = run_result.structured_content
     assert run_data is not None
+    assert run_data["requested_cwd"] == str(workspace)
+    assert run_data["resolved_cwd"] == str(workspace)
+    assert run_data["cwd"] == str(workspace)
+    assert run_data["worktree_cwd"] is None
+    assert run_data["path_mapping_applied"] is False
     assert run_data["proposal_id"]
     assert run_data["proposal_sha256"].startswith("sha256:")
     assert run_data["artifact_error"] is None
