@@ -10,6 +10,7 @@ from fastmcp.server.auth import AccessToken
 import server
 from host_coding_agent.models import (
     AgentName,
+    DeliveryMode,
     IsolationMode,
     ProfileConfig,
     RunMode,
@@ -98,6 +99,55 @@ async def test_async_development_task_returns_immediately_and_can_be_polled(
         "completed",
         "succeeded",
     ]
+
+
+@pytest.mark.asyncio
+async def test_async_development_task_rejects_invalid_direct_delivery_mode(
+    config,
+    monkeypatch,
+    tmp_path: Path,
+):
+    workspace = config.security.allowed_roots[0]
+    config.auth.enabled = True
+    config.profiles["dev-bot"] = ProfileConfig(
+        token_env="TEST_DEV_TOKEN",
+        allowed_roots=[workspace],
+        allowed_agents=[AgentName.codex],
+        allowed_modes=[RunMode.propose_patch],
+        allowed_delivery_modes=[DeliveryMode.manual, DeliveryMode.commit],
+        allowed_isolation_modes=[IsolationMode.direct],
+        default_isolation_mode=IsolationMode.direct,
+        default_cwd=workspace,
+        default_agent=AgentName.codex,
+    )
+    monkeypatch.setenv("TEST_DEV_TOKEN", "d" * 32)
+    config.artifacts.path = tmp_path / "artifacts" / "proposals.db"
+    config.worktrees.root = tmp_path / "worktrees"
+    config.worktrees.state_path = tmp_path / "artifacts" / "worktrees.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json"), sort_keys=False))
+    monkeypatch.setattr(server, "get_access_token", lambda: _access_token())
+
+    mcp, _ = server.create_server(config_path)
+    result = await mcp.call_tool(
+        "start_development_task",
+        {
+            "task": "change app",
+            "agent": "codex",
+            "isolation_mode": "direct",
+            "delivery_mode": "commit",
+        },
+    )
+    data = result.structured_content
+
+    assert data["ok"] is False
+    assert data["stage"] == "validation"
+    assert data["error_code"] == "invalid_isolation_delivery_combination"
+    assert data["requested"] == {
+        "isolation_mode": "direct",
+        "delivery_mode": "commit",
+    }
+    assert "valid_combinations" in data
 
 
 @pytest.mark.asyncio

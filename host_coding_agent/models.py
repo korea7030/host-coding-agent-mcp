@@ -42,6 +42,11 @@ class IsolationMode(str, Enum):
     worktree = "worktree"
 
 
+class DirectWritePolicy(str, Enum):
+    allow = "allow"
+    fail_if_changed = "fail_if_changed"
+
+
 class ExecutionContext(BaseModel):
     """Per-call project preferences supplied by the invoking assistant."""
 

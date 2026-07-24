@@ -31,12 +31,18 @@ from host_coding_agent.automated_delivery import (
 )
 from host_coding_agent.config import validate_profile_cwd
 from host_coding_agent.delivery import ManualDelivery, ManualDeliveryError
+from host_coding_agent.direct_safety import changed_files, snapshot_workspace
 from host_coding_agent.health import (
     check_execution_health as build_execution_health,
     compact_execution_health,
 )
 from host_coding_agent.jobs import JobError, JobStore
-from host_coding_agent.models import DeliveryMode, IsolationMode, WorktreeStatus
+from host_coding_agent.models import (
+    DeliveryMode,
+    DirectWritePolicy,
+    IsolationMode,
+    WorktreeStatus,
+)
 from host_coding_agent.profiles import (
     authenticated_profile,
     merge_context,
@@ -119,6 +125,45 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
             f"{normalize_proposal_sha256(proposal_sha256)}"
         )
 
+    def isolation_delivery_validation_error(
+        *,
+        isolation_mode: IsolationMode,
+        delivery_mode: DeliveryMode,
+    ) -> dict | None:
+        if isolation_mode == IsolationMode.direct and delivery_mode != DeliveryMode.manual:
+            return {
+                "ok": False,
+                "stage": "validation",
+                "error_code": "invalid_isolation_delivery_combination",
+                "error": "delivery_mode applies only to worktree isolation",
+                "requested": {
+                    "isolation_mode": isolation_mode.value,
+                    "delivery_mode": delivery_mode.value,
+                },
+                "valid_combinations": [
+                    {
+                        "isolation_mode": "direct",
+                        "delivery_mode": "manual",
+                        "meaning": "Modify the resolved workspace immediately; no proposal, commit, or PR delivery.",
+                    },
+                    {
+                        "isolation_mode": "worktree",
+                        "delivery_mode": "manual",
+                        "meaning": "Create a proposal that requires external approval before applying.",
+                    },
+                    {
+                        "isolation_mode": "worktree",
+                        "delivery_mode": "commit|auto|pr",
+                        "meaning": "Run managed worktree delivery when allowed by the authenticated profile.",
+                    },
+                ],
+                "recommended_next_action": (
+                    "Use delivery_mode='manual' with isolation_mode='direct', "
+                    "or switch to isolation_mode='worktree' for manual/commit/auto/pr delivery."
+                ),
+            }
+        return None
+
     def execute_profile_request(
         *,
         task: str,
@@ -128,6 +173,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         timeout_sec: int,
         assistant_id: str | None,
         context: ExecutionContext | None,
+        direct_write_policy: DirectWritePolicy = DirectWritePolicy.allow,
     ) -> dict:
         if config.auth.enabled:
             resolved = resolve_profile_request(
@@ -284,6 +330,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         timeout_sec: int,
         assistant_id: str | None,
         context: ExecutionContext | None,
+        direct_write_policy: DirectWritePolicy = DirectWritePolicy.allow,
     ) -> dict:
         profile_name, profile = development_profile(assistant_id)
         if IsolationMode.direct not in profile.allowed_isolation_modes:
@@ -307,6 +354,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
             config,
             runtime_registry=runtime_registry,
         )
+        before_snapshot = snapshot_workspace(direct_cwd)
         result = execute_agent(
             task=task,
             cwd=str(direct_cwd),
@@ -319,11 +367,27 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
             allowed_agents=set(profile.allowed_agents),
             allow_apply_patch_override=True,
         )
+        after_snapshot = snapshot_workspace(direct_cwd)
+        changed = changed_files(before_snapshot, after_snapshot)
+        write_policy_violated = (
+            direct_write_policy == DirectWritePolicy.fail_if_changed
+            and bool(changed)
+        )
+        ok = result.ok and not write_policy_violated
         return {
-            "ok": result.ok,
-            "stage": "completed" if result.ok else "direct",
+            "ok": ok,
+            "stage": "completed" if ok else "direct",
             "isolation_mode": IsolationMode.direct.value,
-            "applied_immediately": result.ok,
+            "direct_write_policy": direct_write_policy.value,
+            "applied_immediately": bool(changed),
+            "changed_files": changed,
+            "changed_file_count": len(changed),
+            "write_policy_violated": write_policy_violated,
+            "error_code": (
+                "direct_write_policy_violation"
+                if write_policy_violated
+                else None
+            ),
             "selected_agent": (
                 result.selected_agent.value
                 if result.selected_agent
@@ -331,7 +395,11 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
             ),
             "cwd": str(result.cwd),
             "summary": result.summary,
-            "error": result.error,
+            "error": (
+                "direct_write_policy=fail_if_changed was violated; files changed in direct mode"
+                if write_policy_violated
+                else result.error
+            ),
         }
 
     @mcp.custom_route(
@@ -599,6 +667,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         agent: AgentName | None = None,
         delivery_mode: DeliveryMode = DeliveryMode.manual,
         isolation_mode: IsolationMode | None = None,
+        direct_write_policy: DirectWritePolicy = DirectWritePolicy.allow,
         timeout_sec: int = 900,
         assistant_id: str | None = None,
         context: ExecutionContext | None = None,
@@ -624,11 +693,13 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                 and selected_agent not in profile.allowed_agents
             ):
                 raise SecurityViolation("agent is not allowed for this profile")
+            validation_error = isolation_delivery_validation_error(
+                isolation_mode=resolved_isolation,
+                delivery_mode=delivery_mode,
+            )
+            if validation_error is not None:
+                return validation_error
             if resolved_isolation == IsolationMode.direct:
-                if delivery_mode != DeliveryMode.manual:
-                    raise SecurityViolation(
-                        "delivery_mode applies only to worktree isolation"
-                    )
                 stage = "direct"
                 return execute_direct_task(
                     task=task,
@@ -637,6 +708,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                     timeout_sec=timeout_sec,
                     assistant_id=assistant_id,
                     context=context,
+                    direct_write_policy=direct_write_policy,
                 )
             profile_name, profile, job = create_managed_job(
                 task=task,
@@ -798,6 +870,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         agent: AgentName | None = None,
         delivery_mode: DeliveryMode = DeliveryMode.manual,
         isolation_mode: IsolationMode | None = None,
+        direct_write_policy: DirectWritePolicy = DirectWritePolicy.allow,
         timeout_sec: int = 900,
         assistant_id: str | None = None,
         context: ExecutionContext | None = None,
@@ -808,6 +881,17 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
             return {**rejected, "stage": "classification"}
         try:
             profile_name, profile = development_profile(assistant_id)
+            resolved_isolation = isolation_mode or profile.default_isolation_mode
+            if resolved_isolation not in profile.allowed_isolation_modes:
+                raise SecurityViolation(
+                    "isolation mode is not allowed for this profile"
+                )
+            validation_error = isolation_delivery_validation_error(
+                isolation_mode=resolved_isolation,
+                delivery_mode=delivery_mode,
+            )
+            if validation_error is not None:
+                return validation_error
             selected_agent = agent or profile.default_agent
             if (
                 selected_agent != AgentName.auto
@@ -832,6 +916,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                             agent=selected_agent,
                             delivery_mode=delivery_mode,
                             isolation_mode=isolation_mode,
+                            direct_write_policy=direct_write_policy,
                             timeout_sec=timeout_sec,
                             assistant_id=assistant_id,
                             context=context,
@@ -852,9 +937,8 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                     "task_hash": task_hash,
                     "requested_agent": selected_agent.value,
                     "delivery_mode": delivery_mode.value,
-                    "isolation_mode": (
-                        isolation_mode or profile.default_isolation_mode
-                    ).value,
+                    "isolation_mode": resolved_isolation.value,
+                    "direct_write_policy": direct_write_policy.value,
                     "timeout_sec": max(
                         1,
                         min(timeout_sec, config.security.max_timeout_sec),
@@ -1151,6 +1235,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
     def run_antigravity(
         task: str, cwd: str | None = None, mode: RunMode | None = None, timeout_sec: int = 900,
         assistant_id: str | None = None, context: ExecutionContext | None = None,
+        direct_write_policy: DirectWritePolicy = DirectWritePolicy.allow,
     ) -> dict:
         """Run Antigravity with direct writes; pass read_only for analysis only."""
         rejected = non_development_response(task)
@@ -1165,6 +1250,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                     timeout_sec=timeout_sec,
                     assistant_id=assistant_id,
                     context=context,
+                    direct_write_policy=direct_write_policy,
                 )
             return execute_profile_request(
                 task=task, cwd=cwd, agent=AgentName.antigravity, mode=mode,
@@ -1177,6 +1263,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
     def run_codex(
         task: str, cwd: str | None = None, mode: RunMode | None = None, timeout_sec: int = 900,
         assistant_id: str | None = None, context: ExecutionContext | None = None,
+        direct_write_policy: DirectWritePolicy = DirectWritePolicy.allow,
     ) -> dict:
         """Run Codex with direct writes; pass read_only for analysis only."""
         rejected = non_development_response(task)
@@ -1191,6 +1278,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                     timeout_sec=timeout_sec,
                     assistant_id=assistant_id,
                     context=context,
+                    direct_write_policy=direct_write_policy,
                 )
             return execute_profile_request(
                 task=task, cwd=cwd, agent=AgentName.codex, mode=mode,
@@ -1203,6 +1291,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
     def run_opencode(
         task: str, cwd: str | None = None, mode: RunMode | None = None, timeout_sec: int = 900,
         assistant_id: str | None = None, context: ExecutionContext | None = None,
+        direct_write_policy: DirectWritePolicy = DirectWritePolicy.allow,
     ) -> dict:
         """Run OpenCode with direct writes; pass read_only for analysis only."""
         rejected = non_development_response(task)
@@ -1217,6 +1306,7 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                     timeout_sec=timeout_sec,
                     assistant_id=assistant_id,
                     context=context,
+                    direct_write_policy=direct_write_policy,
                 )
             return execute_profile_request(
                 task=task, cwd=cwd, agent=AgentName.opencode, mode=mode,

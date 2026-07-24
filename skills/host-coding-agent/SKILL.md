@@ -46,7 +46,12 @@ Prefer `start_development_task` for ordinary development after explicit agent
 selection and a successful execution health result. `check_host_coding_agents`
 returns CLI availability plus a compact `execution_health` summary by default;
 call `check_execution_health` when the compact summary shows runtime, cwd mapping,
-sandbox, or worktree blockers. `start_development_task` returns a job identifier immediately. Poll `get_async_job` until
+sandbox, or worktree blockers. Direct mode modifies the resolved workspace
+immediately and returns `changed_files`. If the user asks to inspect or verify
+without changes but direct mode is still used, pass
+`direct_write_policy: fail_if_changed`; report any
+`direct_write_policy_violation` as a failed safety check, not as successful
+development. `start_development_task` returns a job identifier immediately. Poll `get_async_job` until
 `status` is `succeeded` or `failed`, and call `get_async_job_events` with the
 latest `next_after` cursor to explain the current stage without repeating old
 events. Read the final development response from the job's `result`. Use

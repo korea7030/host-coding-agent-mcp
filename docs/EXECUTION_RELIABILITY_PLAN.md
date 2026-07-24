@@ -204,6 +204,8 @@ Next action: ensure the Hermes development-policy plugin can call /runtime/regis
 
 ### P1-1. direct + delivery mode validation 개선
 
+Status: implemented.
+
 현재 direct mode에서 `delivery_mode != manual`이면 에러다.
 
 유지할 정책:
@@ -221,6 +223,8 @@ Next action: ensure the Hermes development-policy plugin can call /runtime/regis
 
 - 초기 validation 단계에서 명확한 structured error 반환
 - error에 valid combinations 포함
+- `run_development_task`와 `start_development_task` 모두 job 생성/agent 실행 전에
+  같은 validation 응답을 반환한다.
 
 응답 예:
 
@@ -238,6 +242,8 @@ Next action: ensure the Hermes development-policy plugin can call /runtime/regis
 
 ### P1-2. Direct read-only 안전장치
 
+Status: implemented.
+
 문제:
 
 - 사용자가 "확인해줘"라고 해도 direct mode는 내부적으로 `apply_patch`로 실행된다.
@@ -248,7 +254,7 @@ Next action: ensure the Hermes development-policy plugin can call /runtime/regis
 1. `run_development_task`에 `intent` 또는 `write_policy` 추가
 
 ```text
-write_policy: "allow" | "forbid" | "fail_if_changed"
+direct_write_policy: "allow" | "fail_if_changed"
 ```
 
 2. direct 실행 전후 git diff 또는 filesystem snapshot 비교
@@ -268,6 +274,18 @@ non-Git workspace:
 
 - `write_policy=fail_if_changed`에서 변경 발생 시 실패
 - 결과에 `changed_files`, `diff_summary`, `applied_immediately` 포함
+
+현재 구현:
+
+- `run_development_task`, `start_development_task`, `run_antigravity`,
+  `run_codex`, `run_opencode`가 `direct_write_policy`를 받는다.
+- direct 실행 전후 workspace snapshot을 비교해 `changed_files`와
+  `changed_file_count`를 반환한다.
+- `direct_write_policy=fail_if_changed`에서 변경이 감지되면
+  `ok=false`, `error_code=direct_write_policy_violation`,
+  `write_policy_violated=true`를 반환한다.
+- `.git`, `node_modules`, venv, cache 계열 runtime directory는 snapshot에서 제외한다.
+- 이미 발생한 direct 변경을 자동 rollback하지는 않는다.
 
 ### P1-3. 공통 path mapping response 정리
 
