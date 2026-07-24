@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .config import ConfigError, validate_cwd
 from .models import AgentName, AppConfig, AttemptResult, ExecutionContext, RunMode, RunResult
+from .process_control import process_registry
 from .progress import emit_progress
 from .routing import route_agents
 from .security import SecurityViolation, redact, validate_task
@@ -408,12 +409,13 @@ def _run_attempt(
         },
     )
     timed_out = False
-    try:
-        stdout, stderr = process.communicate(stdin_prompt, timeout=timeout_sec)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        _terminate_group(process.pid)
-        stdout, stderr = process.communicate()
+    with process_registry.register_current_process(process.pid):
+        try:
+            stdout, stderr = process.communicate(stdin_prompt, timeout=timeout_sec)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _terminate_group(process.pid)
+            stdout, stderr = process.communicate()
     stdout, redacted_out = redact(stdout, config.security.max_output_chars)
     stderr, redacted_err = redact(stderr, min(config.security.max_output_chars, 20_000))
     failure_category, failure_detail = _classify_failure(

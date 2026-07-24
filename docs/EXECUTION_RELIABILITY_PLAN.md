@@ -480,9 +480,13 @@ Telegram에서 장기 `Working` 상태가 지속될 때 profile-scoped job을 te
 - MCP tool `cancel_async_job(job_id, reason?)` 추가
 - 취소는 기존 DB CHECK constraint와 호환되도록 `status=failed`,
   `stage=cancelled`로 기록한다.
-- cancellation event에는 `process_kill_guaranteed=false`를 명시한다.
-- 이미 실행 중인 worker/process를 OS 레벨에서 강제 종료한다고 보장하지는 않지만,
-  늦게 완료된 worker가 cancelled terminal 상태를 `succeeded`로 덮어쓰지 못하게 한다.
+- async job context에서 실행되는 coding-agent subprocess PID를 process registry에 등록한다.
+- `cancel_async_job`은 profile 소유권 확인 후 등록된 process group에 SIGTERM/SIGKILL을
+  보낸다.
+- cancellation event에는 `process_killed`, `process_kill_guaranteed`,
+  `process_count`, `pids`를 기록한다.
+- registry 밖에서 daemonize된 하위 process까지 회수한다고 보장하지는 않지만, 늦게
+  완료된 worker가 cancelled terminal 상태를 `succeeded`로 덮어쓰지 못하게 한다.
 
 ## 7. 권장 구현 순서
 

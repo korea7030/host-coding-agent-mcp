@@ -129,8 +129,10 @@ Polling 절차:
 `artifacts/jobs.db`에 profile별로 격리되어 저장된다. 서버 재시작 전에 실행 중이던 job은
 재실행하지 않고 `failed/interrupted`로 표시한다.
 `cancel_async_job`은 profile-scoped이며 `status=failed`, `stage=cancelled`로 기록한다.
-이미 실행 중인 Python worker나 하위 process를 강제 종료한다고 보장하지는 않지만, 늦게
-끝난 worker가 terminal job 상태를 성공으로 덮어쓰지 못하게 한다.
+현재 job context에 등록된 coding-agent subprocess process group은 SIGTERM/SIGKILL로
+종료한다. 이미 process registry 밖에서 daemonize된 하위 process까지 회수한다고
+보장하지는 않지만, 늦게 끝난 worker가 terminal job 상태를 성공으로 덮어쓰지 못하게
+한다.
 
 문제 진단 시에는 다음을 확인한다.
 

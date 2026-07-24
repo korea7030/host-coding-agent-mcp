@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from host_coding_agent.process_control import process_registry
 from host_coding_agent.security import redact
 
 
@@ -251,6 +252,7 @@ class JobStore:
                     "cancelled": False,
                     "cancel_note": "job is already terminal",
                 }
+            kill_result = process_registry.terminate_job(job_id)
             connection.execute(
                 """
                 UPDATE jobs
@@ -268,7 +270,7 @@ class JobStore:
                 details={
                     "reason": message,
                     "cooperative": True,
-                    "process_kill_guaranteed": False,
+                    **kill_result.as_dict(),
                 },
                 created_at=now,
             )
@@ -284,6 +286,7 @@ class JobStore:
                 "Job was marked cancelled. Already-running worker code may finish "
                 "in the background, but it cannot overwrite this terminal job state."
             ),
+            **kill_result.as_dict(),
         }
 
     def shutdown(self, wait: bool = True) -> None:
@@ -340,7 +343,8 @@ class JobStore:
                 )
 
         try:
-            result = worker(emit)
+            with process_registry.job_context(job_id):
+                result = worker(emit)
             _, result_json = self._validated_dict(result, "worker result")
         except Exception as exc:
             self._finish_failed(job_id, exc)

@@ -1211,7 +1211,10 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                 "status": job["status"],
                 "stage": job["stage"],
                 "cancelled": bool(job.get("cancelled")),
-                "process_kill_guaranteed": False,
+                "process_killed": bool(job.get("process_killed")),
+                "process_kill_guaranteed": bool(
+                    job.get("process_kill_guaranteed")
+                ),
             }
         except (ConfigError, JobError, SecurityViolation, ValueError) as exc:
             return {"ok": False, "error": str(exc)}

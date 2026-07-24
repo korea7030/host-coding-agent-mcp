@@ -73,7 +73,8 @@ stage without repeating old events. Read the final development response from the
 job's `result`. Use `list_async_jobs` to recover recent identifiers after a
 client interruption. If the user asks to stop a job, call `cancel_async_job`.
 Cancellation marks the job as terminal with `status=failed` and
-`stage=cancelled`; it does not guarantee OS-level process termination.
+`stage=cancelled`; registered coding-agent subprocess process groups are
+terminated, but daemonized descendants outside the process registry may survive.
 
 If MCP tool calls fail with `ClosedResourceError` or another HTTP stream/client
 error, check `GET /healthz` or `GET /readyz` outside the MCP stream. If
