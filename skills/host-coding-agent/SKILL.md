@@ -55,6 +55,7 @@ check_host_coding_agents
 → start_development_task
 → get_async_job_events
 → get_async_job
+→ cancel_async_job when the user asks to stop a queued/running job
 ```
 
 Prefer `start_development_task` for ordinary development after explicit agent
@@ -70,7 +71,9 @@ development. `start_development_task` returns a job identifier immediately. Poll
 `get_async_job_events` with the latest `next_after` cursor to explain the current
 stage without repeating old events. Read the final development response from the
 job's `result`. Use `list_async_jobs` to recover recent identifiers after a
-client interruption.
+client interruption. If the user asks to stop a job, call `cancel_async_job`.
+Cancellation marks the job as terminal with `status=failed` and
+`stage=cancelled`; it does not guarantee OS-level process termination.
 
 If MCP tool calls fail with `ClosedResourceError` or another HTTP stream/client
 error, check `GET /healthz` or `GET /readyz` outside the MCP stream. If

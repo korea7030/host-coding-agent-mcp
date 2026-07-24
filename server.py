@@ -1196,6 +1196,27 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
             return {"ok": False, "error": str(exc)}
 
     @mcp.tool
+    def cancel_async_job(
+        job_id: str,
+        reason: str | None = None,
+        assistant_id: str | None = None,
+    ) -> dict:
+        """Mark a queued/running asynchronous job as cancelled for this profile."""
+        try:
+            profile_name, _ = development_profile(assistant_id)
+            job = job_store.cancel(job_id, profile_name, reason=reason)
+            return {
+                "ok": True,
+                "job": job,
+                "status": job["status"],
+                "stage": job["stage"],
+                "cancelled": bool(job.get("cancelled")),
+                "process_kill_guaranteed": False,
+            }
+        except (ConfigError, JobError, SecurityViolation, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @mcp.tool
     def list_async_jobs(
         limit: int = 20,
         assistant_id: str | None = None,

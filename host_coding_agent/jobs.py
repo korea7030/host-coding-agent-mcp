@@ -234,6 +234,58 @@ class JobStore:
         next_after = records[-1]["sequence"] if records else after
         return {"events": records, "next_after": next_after, "has_more": has_more}
 
+    def cancel(self, job_id: str, profile: str, *, reason: str | None = None) -> dict[str, Any]:
+        message = reason or "cancelled by request"
+        now = self._now()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM jobs WHERE job_id = ? AND profile = ?",
+                (job_id, profile),
+            ).fetchone()
+            if row is None:
+                raise JobError("job not found")
+            current = self._deserialize_job(row)
+            if current["status"] in {"succeeded", "failed"}:
+                return {
+                    **current,
+                    "cancelled": False,
+                    "cancel_note": "job is already terminal",
+                }
+            connection.execute(
+                """
+                UPDATE jobs
+                SET status = 'failed', stage = 'cancelled', finished_at = ?,
+                    updated_at = ?, error = ?
+                WHERE job_id = ? AND profile = ? AND status IN ('queued', 'running')
+                """,
+                (now, now, message, job_id, profile),
+            )
+            self._insert_event(
+                connection,
+                job_id=job_id,
+                stage="cancelled",
+                message="Job cancelled",
+                details={
+                    "reason": message,
+                    "cooperative": True,
+                    "process_kill_guaranteed": False,
+                },
+                created_at=now,
+            )
+            row = connection.execute(
+                "SELECT * FROM jobs WHERE job_id = ? AND profile = ?",
+                (job_id, profile),
+            ).fetchone()
+        cancelled = self._deserialize_job(row)
+        return {
+            **cancelled,
+            "cancelled": True,
+            "cancel_note": (
+                "Job was marked cancelled. Already-running worker code may finish "
+                "in the background, but it cannot overwrite this terminal job state."
+            ),
+        }
+
     def shutdown(self, wait: bool = True) -> None:
         self._executor.shutdown(wait=wait)
 
@@ -296,7 +348,7 @@ class JobStore:
 
         finished_at = self._now()
         with self._connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 UPDATE jobs
                 SET status = 'succeeded', stage = 'succeeded', finished_at = ?,
@@ -305,20 +357,21 @@ class JobStore:
                 """,
                 (finished_at, finished_at, result_json, job_id),
             )
-            self._insert_event(
-                connection,
-                job_id=job_id,
-                stage="succeeded",
-                message="Job succeeded",
-                details=None,
-                created_at=finished_at,
-            )
+            if cursor.rowcount == 1:
+                self._insert_event(
+                    connection,
+                    job_id=job_id,
+                    stage="succeeded",
+                    message="Job succeeded",
+                    details=None,
+                    created_at=finished_at,
+                )
 
     def _finish_failed(self, job_id: str, exc: Exception) -> None:
         error, _ = redact(f"{type(exc).__name__}: {exc}")
         finished_at = self._now()
         with self._connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 UPDATE jobs
                 SET status = 'failed', stage = 'failed', finished_at = ?,
@@ -327,14 +380,15 @@ class JobStore:
                 """,
                 (finished_at, finished_at, error, job_id),
             )
-            self._insert_event(
-                connection,
-                job_id=job_id,
-                stage="failed",
-                message="Job failed",
-                details=None,
-                created_at=finished_at,
-            )
+            if cursor.rowcount == 1:
+                self._insert_event(
+                    connection,
+                    job_id=job_id,
+                    stage="failed",
+                    message="Job failed",
+                    details=None,
+                    created_at=finished_at,
+                )
 
     @staticmethod
     def _insert_event(

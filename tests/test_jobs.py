@@ -148,6 +148,48 @@ def test_worker_failure_is_redacted_and_invalid_results_fail(tmp_path: Path):
         store.shutdown()
 
 
+def test_cancel_marks_running_job_terminal_and_preserves_cancel_event(tmp_path: Path):
+    store = JobStore(tmp_path / "jobs.db", max_workers=1)
+    started = threading.Event()
+    release = threading.Event()
+
+    def worker(emit):
+        started.set()
+        assert release.wait(1)
+        emit("late", "Late event")
+        return {"ok": True}
+
+    try:
+        submitted = store.submit("dev", "long", {}, worker)
+        assert started.wait(1)
+
+        cancelled = store.cancel(
+            submitted["job_id"],
+            "dev",
+            reason="user requested cancellation",
+        )
+
+        assert cancelled["status"] == "failed"
+        assert cancelled["stage"] == "cancelled"
+        assert cancelled["cancelled"] is True
+        assert cancelled["error"] == "user requested cancellation"
+        release.set()
+        time.sleep(0.05)
+        final = store.get(submitted["job_id"], "dev")
+        assert final["status"] == "failed"
+        assert final["stage"] == "cancelled"
+        events = store.events(submitted["job_id"], "dev")["events"]
+        assert [event["stage"] for event in events] == [
+            "queued",
+            "running",
+            "cancelled",
+        ]
+        assert events[-1]["details"]["process_kill_guaranteed"] is False
+    finally:
+        release.set()
+        store.shutdown()
+
+
 @pytest.mark.parametrize(
     "metadata",
     [object(), {"bad": object()}, {"number": float("nan")}],

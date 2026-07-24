@@ -121,11 +121,16 @@ Polling 절차:
 2. `get_async_job_events(job_id, after=<next_after>)`로 새 이벤트만 조회한다.
 3. terminal 상태에서는 `job.result`에서 기존 workflow 응답을 읽는다.
 4. 호출이 끊겼으면 `list_async_jobs`로 profile의 최근 job ID를 복구한다.
+5. 사용자가 중단을 요청하면 `cancel_async_job(job_id, reason)`으로 job을 terminal
+   상태로 표시한다.
 
 이벤트에는 worktree 생성, agent routing, agent attempt 시작/종료, return code, timeout,
 소요시간, test, proposal, delivery 단계가 기록된다. Job과 이벤트는
 `artifacts/jobs.db`에 profile별로 격리되어 저장된다. 서버 재시작 전에 실행 중이던 job은
 재실행하지 않고 `failed/interrupted`로 표시한다.
+`cancel_async_job`은 profile-scoped이며 `status=failed`, `stage=cancelled`로 기록한다.
+이미 실행 중인 Python worker나 하위 process를 강제 종료한다고 보장하지는 않지만, 늦게
+끝난 worker가 terminal job 상태를 성공으로 덮어쓰지 못하게 한다.
 
 문제 진단 시에는 다음을 확인한다.
 
@@ -190,7 +195,7 @@ host-coding-agent 서버 다운이 아니라 Hermes MCP HTTP stream client/recon
 - Discovery/선택: `check_host_coding_agents`
 - 실행 health: `check_execution_health`
 - 비동기 실행: `start_development_task`, `get_async_job`, `get_async_job_events`,
-  `list_async_jobs`
+  `cancel_async_job`, `list_async_jobs`
 - 동기 호환: `run_development_task`, `run_coding_agent`
 - 단계별 worktree: `create_development_job`, `run_development_job`,
   `test_development_job`, `propose_development_job`, `deliver_development_job`,

@@ -30,6 +30,7 @@ authenticated `host-coding-agent` MCP server.
 - `mcp_host_coding_agent_start_development_task`
 - `mcp_host_coding_agent_get_async_job`
 - `mcp_host_coding_agent_get_async_job_events`
+- `mcp_host_coding_agent_cancel_async_job`
 - `mcp_host_coding_agent_run_development_task`
 - `mcp_host_coding_agent_run_coding_agent`
 - `mcp_host_coding_agent_run_antigravity`
@@ -43,6 +44,7 @@ check_host_coding_agents
 → check_execution_health
 → start_development_task(agent=<explicit selected agent>, ...)
 → get_async_job_events
+→ cancel_async_job when the user asks to stop a queued/running job
 ```
 
 Use a concrete selected agent such as `opencode`, `codex`, or `antigravity` for
