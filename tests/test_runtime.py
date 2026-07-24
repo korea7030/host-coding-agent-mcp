@@ -102,11 +102,16 @@ def test_rejects_container_path_outside_profile_workspace(
 def test_rejects_unregistered_runtime(config, tmp_path, monkeypatch):
     registry, _, _ = _registry(config, tmp_path, monkeypatch)
 
-    with pytest.raises(ConfigError, match="not registered"):
+    with pytest.raises(ConfigError) as exc_info:
         registry.resolve(
             profile_name="invest-bot",
             container_path="/opt/data/profiles/invest-bot/workspace",
         )
+    message = str(exc_info.value)
+    assert "Docker runtime is not registered for profile 'invest-bot'" in message
+    assert "/opt/data/profiles/invest-bot/workspace" in message
+    assert "Registered profiles: (none)" in message
+    assert "/runtime/register" in message
 
 
 def test_rejects_container_with_wrong_profile_label(

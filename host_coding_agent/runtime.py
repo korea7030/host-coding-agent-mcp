@@ -70,6 +70,27 @@ class RuntimeRegistry:
             "workspace_roots": [str(path) for path in dynamic_roots],
         }
 
+    def registered_profiles(self) -> list[str]:
+        return sorted(self._registrations)
+
+    def status(self, *, profile_name: str) -> dict[str, Any]:
+        registration = self._registrations.get(profile_name)
+        profile = self.config.profiles.get(profile_name)
+        return {
+            "registered": registration is not None,
+            "registered_profiles": self.registered_profiles(),
+            "container_id": (
+                registration.container_id[:12]
+                if registration is not None
+                else None
+            ),
+            "allowed_container_roots": (
+                [str(root) for root in profile.allowed_container_roots]
+                if profile is not None
+                else []
+            ),
+        }
+
     def resolve(self, *, profile_name: str, container_path: str | Path) -> Path:
         profile = self.config.profiles.get(profile_name)
         if profile is None:
@@ -85,7 +106,18 @@ class RuntimeRegistry:
             raise ConfigError("container cwd is not allowed for this profile")
         registration = self._registrations.get(profile_name)
         if registration is None:
-            raise ConfigError("Docker runtime is not registered for this profile")
+            roots = ", ".join(str(root) for root in profile.allowed_container_roots)
+            registered = ", ".join(self.registered_profiles()) or "(none)"
+            raise ConfigError(
+                f"Docker runtime is not registered for profile '{profile_name}'. "
+                "The requested cwd is a container path and must be mapped through "
+                "a registered Docker runtime. "
+                f"Expected container roots: {roots or '(none)'}. "
+                f"Registered profiles: {registered}. "
+                "Next action: ensure the Hermes development-policy plugin can "
+                "call /runtime/register with MCP_HOST_CODING_AGENT_API_KEY, then "
+                "restart or trigger the profile gateway."
+            )
         if time.monotonic() - registration.registered_at > self.cache_ttl_sec:
             registration = self._inspect(registration.container_id)
             self._validate_identity(profile_name, registration)

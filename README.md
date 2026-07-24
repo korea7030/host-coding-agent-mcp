@@ -78,7 +78,9 @@ http://127.0.0.1:8787/mcp
 
 ## Agent 확인과 명시 선택
 
-개발 실행 전에 `check_host_coding_agents`를 호출한다. 응답의
+개발 실행 전에 `check_host_coding_agents`로 CLI availability와 간단한 execution health
+요약을 확인한다. 더 자세한 profile runtime/cwd mapping/sandbox/worktree readiness가
+필요하면 `check_execution_health`를 별도로 호출한다. `check_host_coding_agents` 응답의
 `selectable_agents`만 사용자에게 제시하고 선택된 이름을 실행 요청의 `agent`에 전달한다.
 각 `agents` 항목은 `installed`, `enabled`, `profile_allowed`, `selectable`, `version`,
 `probe_error`, `unavailable_reason`을 제공한다. `auto`는 기존 자동화 호환용으로 남아 있지만
@@ -86,6 +88,7 @@ http://127.0.0.1:8787/mcp
 
 ```text
 check_host_coding_agents
+→ 필요 시 check_execution_health(cwd, isolation_mode)
 → 사용자에게 antigravity/codex/opencode 중 selectable agent 선택 요청
 → start_development_task(agent="codex", ...)
 ```
@@ -169,6 +172,7 @@ host-coding-agent`로 검증한다.
 핵심 도구:
 
 - Discovery/선택: `check_host_coding_agents`
+- 실행 health: `check_execution_health`
 - 비동기 실행: `start_development_task`, `get_async_job`, `get_async_job_events`,
   `list_async_jobs`
 - 동기 호환: `run_development_task`, `run_coding_agent`

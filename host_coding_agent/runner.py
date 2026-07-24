@@ -229,6 +229,63 @@ def _sandbox_prefix(cwd: Path, writable_paths: list[Path] | None = None) -> list
     return [sandbox, "-p", profile]
 
 
+def _classify_failure(
+    *,
+    stderr: str = "",
+    error: Exception | None = None,
+    returncode: int | None = None,
+    timed_out: bool = False,
+) -> tuple[str | None, str | None]:
+    text = f"{stderr}\n{error or ''}".strip()
+    if timed_out:
+        return "timeout", "coding agent timed out"
+    if isinstance(error, FileNotFoundError):
+        return "agent_unavailable", str(error)
+    if isinstance(error, SecurityViolation):
+        message = str(error)
+        if "sandbox-exec" in message:
+            return "sandbox_unavailable", message
+        return "security_violation", message
+    if "sandbox-exec" in text or "sandbox_apply" in text:
+        if returncode == 71 or "Operation not permitted" in text:
+            return "sandbox_apply_failed", text
+        return "sandbox_failed", text
+    if error is not None:
+        return "process_error", str(error)
+    if returncode not in (None, 0):
+        return "agent_failed", text or f"process exited with code {returncode}"
+    return None, None
+
+
+def _failed_attempt(agent: AgentName, exc: Exception) -> AttemptResult:
+    category, detail = _classify_failure(error=exc)
+    return AttemptResult(
+        agent=agent,
+        ok=False,
+        stderr=str(exc),
+        failure_category=category,
+        failure_detail=detail,
+    )
+
+
+def _result_error(selected: AgentName | None, attempts: list[AttemptResult]) -> str | None:
+    if selected is not None:
+        return None
+    categories = [
+        attempt.failure_category
+        for attempt in attempts
+        if attempt.failure_category
+    ]
+    if categories and all(
+        category in {"sandbox_unavailable", "sandbox_apply_failed", "sandbox_failed"}
+        for category in categories
+    ):
+        return "sandbox failed for all attempted agents"
+    if categories and categories[-1]:
+        return f"all available agents failed; last failure category: {categories[-1]}"
+    return "all available agents failed"
+
+
 def _build_command(
     agent: AgentName,
     task: str,
@@ -359,6 +416,11 @@ def _run_attempt(
         stdout, stderr = process.communicate()
     stdout, redacted_out = redact(stdout, config.security.max_output_chars)
     stderr, redacted_err = redact(stderr, min(config.security.max_output_chars, 20_000))
+    failure_category, failure_detail = _classify_failure(
+        stderr=stderr,
+        returncode=process.returncode,
+        timed_out=timed_out,
+    )
     result = AttemptResult(
         agent=agent,
         ok=process.returncode == 0 and not timed_out,
@@ -367,6 +429,8 @@ def _run_attempt(
         stderr=stderr,
         duration_sec=round(time.monotonic() - started, 3),
         timed_out=timed_out,
+        failure_category=failure_category,
+        failure_detail=failure_detail,
         command=command,
     )
     emit_progress(
@@ -377,6 +441,7 @@ def _run_attempt(
             "ok": result.ok,
             "returncode": result.returncode,
             "timed_out": result.timed_out,
+            "failure_category": result.failure_category,
             "duration_sec": result.duration_sec,
         },
     )
@@ -498,7 +563,7 @@ def run_coding_agent(
                 context,
             )
         except (FileNotFoundError, OSError, SecurityViolation) as exc:
-            attempt = AttemptResult(agent=candidate, ok=False, stderr=str(exc))
+            attempt = _failed_attempt(candidate, exc)
         attempts.append(attempt)
         if attempt.ok:
             selected = candidate
@@ -521,7 +586,7 @@ def run_coding_agent(
         proposed_diff=_extract_diff(final_text),
         redacted=bool(final and ("[REDACTED]" in final.stdout or "[REDACTED]" in final.stderr)),
         results=attempts,
-        error=None if selected else "all available agents failed",
+        error=_result_error(selected, attempts),
     )
     _audit(config, {
         "timestamp": datetime.now().astimezone().isoformat(),
@@ -551,6 +616,7 @@ def run_coding_agent(
                 "agent": item.agent.value,
                 "returncode": item.returncode,
                 "timed_out": item.timed_out,
+                "failure_category": item.failure_category,
                 "stderr_preview": item.stderr[:1000],
             }
             for item in attempts
@@ -628,7 +694,7 @@ def run_managed_worktree_agent(
                 context,
             )
         except (FileNotFoundError, OSError, SecurityViolation) as exc:
-            attempt = AttemptResult(agent=candidate, ok=False, stderr=str(exc))
+            attempt = _failed_attempt(candidate, exc)
         attempts.append(attempt)
         if attempt.ok:
             selected = candidate
@@ -664,7 +730,7 @@ def run_managed_worktree_agent(
             and ("[REDACTED]" in final.stdout or "[REDACTED]" in final.stderr)
         ),
         results=attempts,
-        error=None if selected else "all available agents failed",
+        error=_result_error(selected, attempts),
     )
     _audit(
         config,
@@ -685,6 +751,7 @@ def run_managed_worktree_agent(
                     "agent": item.agent.value,
                     "returncode": item.returncode,
                     "timed_out": item.timed_out,
+                    "failure_category": item.failure_category,
                     "stderr_preview": item.stderr[:1000],
                 }
                 for item in attempts

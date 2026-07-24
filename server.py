@@ -31,6 +31,10 @@ from host_coding_agent.automated_delivery import (
 )
 from host_coding_agent.config import validate_profile_cwd
 from host_coding_agent.delivery import ManualDelivery, ManualDeliveryError
+from host_coding_agent.health import (
+    check_execution_health as build_execution_health,
+    compact_execution_health,
+)
 from host_coding_agent.jobs import JobError, JobStore
 from host_coding_agent.models import DeliveryMode, IsolationMode, WorktreeStatus
 from host_coding_agent.profiles import (
@@ -487,7 +491,11 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
             )
 
     @mcp.tool
-    def check_host_coding_agents() -> dict:
+    def check_host_coding_agents(
+        cwd: str | None = None,
+        isolation_mode: IsolationMode | None = None,
+        include_execution_health: bool = True,
+    ) -> dict:
         """Discover configured host CLIs and agents selectable by this profile."""
         try:
             allowed_agents = None
@@ -497,7 +505,43 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                 allowed_agents = set(config.profiles[profile_name].allowed_agents)
             result = check_agents(config, allowed_agents=allowed_agents)
             result["profile"] = profile_name
+            result["discovery_scope"] = "cli_availability"
+            result["execution_health_tool"] = "check_execution_health"
+            result["warning"] = (
+                "CLI availability does not guarantee profile runtime, cwd mapping, "
+                "sandbox, or worktree readiness. Call check_execution_health before "
+                "running development tasks."
+            )
+            if include_execution_health and profile_name is not None:
+                health = build_execution_health(
+                    config=config,
+                    profile_name=profile_name,
+                    runtime_registry=runtime_registry,
+                    cwd=cwd,
+                    isolation_mode=isolation_mode,
+                )
+                result["execution_ready"] = health["ok"]
+                result["execution_health"] = compact_execution_health(health)
             return result
+        except (ConfigError, SecurityViolation, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @mcp.tool
+    def check_execution_health(
+        cwd: str | None = None,
+        isolation_mode: IsolationMode | None = None,
+        assistant_id: str | None = None,
+    ) -> dict:
+        """Check profile runtime, cwd mapping, sandbox, and isolation readiness."""
+        try:
+            profile_name, _ = development_profile(assistant_id)
+            return build_execution_health(
+                config=config,
+                profile_name=profile_name,
+                runtime_registry=runtime_registry,
+                cwd=cwd,
+                isolation_mode=isolation_mode,
+            )
         except (ConfigError, SecurityViolation, ValueError) as exc:
             return {"ok": False, "error": str(exc)}
 

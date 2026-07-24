@@ -48,6 +48,57 @@ def test_agent_attempt_emits_start_and_finish_progress(config, monkeypatch):
     assert events[-1][2]["timed_out"] is False
 
 
+def test_agent_attempt_classifies_sandbox_apply_failure(config, monkeypatch):
+    class FakeProcess:
+        pid = 123
+        returncode = 71
+
+        def communicate(self, prompt, timeout):
+            return "", "sandbox-exec: sandbox_apply: Operation not permitted"
+
+    monkeypatch.setattr("host_coding_agent.runner.subprocess.Popen", lambda *args, **kwargs: FakeProcess())
+    from host_coding_agent.runner import _run_attempt
+
+    result = _run_attempt(
+        AgentName.codex,
+        "inspect",
+        RunMode.read_only,
+        config.security.allowed_roots[0],
+        30,
+        config,
+    )
+
+    assert result.ok is False
+    assert result.failure_category == "sandbox_apply_failed"
+    assert "Operation not permitted" in result.failure_detail
+
+
+def test_run_coding_agent_reports_sandbox_failure_separately(config, monkeypatch):
+    def sandbox_attempt(agent, *args):
+        return AttemptResult(
+            agent=agent,
+            ok=False,
+            returncode=71,
+            stderr="sandbox-exec: sandbox_apply: Operation not permitted",
+            failure_category="sandbox_apply_failed",
+            failure_detail="sandbox-exec: sandbox_apply: Operation not permitted",
+        )
+
+    monkeypatch.setattr("host_coding_agent.runner._run_attempt", sandbox_attempt)
+    result = run_coding_agent(
+        task="inspect",
+        cwd=str(config.security.allowed_roots[0]),
+        agent=AgentName.codex,
+        mode=RunMode.read_only,
+        timeout_sec=30,
+        config=config,
+    )
+
+    assert result.ok is False
+    assert result.error == "sandbox failed for all attempted agents"
+    assert result.results[0].failure_category == "sandbox_apply_failed"
+
+
 def test_agent_discovery_reports_installation_selection_and_profile_policy(
     config, monkeypatch
 ):

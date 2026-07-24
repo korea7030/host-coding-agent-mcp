@@ -188,6 +188,8 @@ class AttemptResult(BaseModel):
     stderr: str = ""
     duration_sec: float = 0.0
     timed_out: bool = False
+    failure_category: str | None = None
+    failure_detail: str | None = None
     command: list[str] = Field(default_factory=list)
 
 

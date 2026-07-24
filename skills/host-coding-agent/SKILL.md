@@ -30,6 +30,7 @@ launching a coding-agent CLI directly.
 Use these names exactly as exposed by the server:
 
 - Discovery: `check_host_coding_agents`
+- Execution health: `check_execution_health`
 - Asynchronous workflow: `start_development_task`, `get_async_job`,
   `get_async_job_events`, `list_async_jobs`
 - Synchronous compatibility workflow: `run_development_task`
@@ -42,7 +43,10 @@ Use these names exactly as exposed by the server:
 - Agent-specific entry points: `run_antigravity`, `run_codex`, `run_opencode`
 
 Prefer `start_development_task` for ordinary development after explicit agent
-selection. It returns a job identifier immediately. Poll `get_async_job` until
+selection and a successful execution health result. `check_host_coding_agents`
+returns CLI availability plus a compact `execution_health` summary by default;
+call `check_execution_health` when the compact summary shows runtime, cwd mapping,
+sandbox, or worktree blockers. `start_development_task` returns a job identifier immediately. Poll `get_async_job` until
 `status` is `succeeded` or `failed`, and call `get_async_job_events` with the
 latest `next_after` cursor to explain the current stage without repeating old
 events. Read the final development response from the job's `result`. Use
