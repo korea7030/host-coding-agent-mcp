@@ -9,7 +9,7 @@ import yaml
 from fastmcp.server.auth import AccessToken
 
 import server
-from host_coding_agent.approvals import ApprovalStore
+from host_coding_agent.approvals import ApprovalError, ApprovalStore
 from host_coding_agent.models import (
     AgentName,
     DeliveryMode,
@@ -418,6 +418,7 @@ async def test_direct_mode_rejects_worktree_delivery_modes_early(
     ("delivery_mode", "expected_stage"),
     [
         ("manual", "awaiting_approval"),
+        ("report", "reported"),
         ("commit", "delivered"),
     ],
 )
@@ -435,7 +436,11 @@ async def test_single_call_development_workflow(
         allowed_roots=[repository],
         allowed_agents=[AgentName.codex],
         allowed_modes=[RunMode.propose_patch],
-        allowed_delivery_modes=[DeliveryMode.manual, DeliveryMode.commit],
+        allowed_delivery_modes=[
+            DeliveryMode.manual,
+            DeliveryMode.report,
+            DeliveryMode.commit,
+        ],
         default_cwd=repository,
         default_agent=AgentName.codex,
     )
@@ -522,6 +527,20 @@ async def test_single_call_development_workflow(
             profile="dev-bot",
         )
         assert approval["status"] == "pending"
+    elif delivery_mode == "report":
+        assert data["delivery_status"] == "reported"
+        assert data["proposal_status"] == "proposed"
+        assert data["requires_approval"] is False
+        assert data["applied"] is False
+        assert data["apply_command"] is None
+        assert "not applied" in data["message"]
+        assert job.status == WorktreeStatus.proposed
+        assert job.worktree.exists()
+        with pytest.raises(ApprovalError, match="approval request not found"):
+            ApprovalStore(config.artifacts.path).get_for_proposal(
+                data["proposal_id"],
+                profile="dev-bot",
+            )
     else:
         assert data["proposal_status"] == "delivered"
         assert data["requires_approval"] is False
@@ -656,6 +675,82 @@ async def test_external_mcp_commit_job_workflow_and_profile_isolation(
     )
     assert not isolated.structured_content["ok"]
     assert "not found" in isolated.structured_content["error"]
+
+
+@pytest.mark.asyncio
+async def test_report_delivery_job_returns_report_without_apply_or_approval(
+    config,
+    monkeypatch,
+    tmp_path: Path,
+):
+    repository = _repository(config.security.allowed_roots[0])
+    config.auth.enabled = True
+    config.profiles["dev-bot"] = ProfileConfig(
+        token_env="TEST_DEV_TOKEN",
+        allowed_roots=[repository],
+        allowed_agents=[AgentName.codex],
+        allowed_modes=[RunMode.propose_patch],
+        allowed_delivery_modes=[DeliveryMode.report],
+        default_cwd=repository,
+        default_agent=AgentName.codex,
+    )
+    monkeypatch.setenv("TEST_DEV_TOKEN", "d" * 32)
+    config.artifacts.path = tmp_path / "artifacts" / "proposals.db"
+    config.worktrees.root = tmp_path / "worktrees"
+    config.worktrees.state_path = tmp_path / "artifacts" / "worktrees.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(config.model_dump(mode="json"), sort_keys=False)
+    )
+    monkeypatch.setattr(server, "get_access_token", lambda: _access_token())
+    mcp, _ = server.create_server(config_path)
+
+    created = await mcp.call_tool(
+        "create_development_job",
+        {
+            "task": "change app",
+            "delivery_mode": "report",
+        },
+    )
+    job_id = created.structured_content["job"]["job_id"]
+    worktree = Path(created.structured_content["job"]["worktree"])
+
+    executed = await mcp.call_tool(
+        "run_development_job",
+        {
+            "job_id": job_id,
+            "task": "change app",
+            "agent": "codex",
+        },
+    )
+    assert executed.structured_content["ok"]
+    (worktree / "app.py").write_text("reported\n")
+
+    tested = await mcp.call_tool("test_development_job", {"job_id": job_id})
+    assert tested.structured_content["ok"]
+
+    proposed = await mcp.call_tool("propose_development_job", {"job_id": job_id})
+    proposed_data = proposed.structured_content
+    assert proposed_data["ok"]
+    assert proposed_data["proposal_status"] == "proposed"
+    assert proposed_data["requires_approval"] is False
+    assert proposed_data["applied"] is False
+    assert proposed_data["apply_command"] is None
+    with pytest.raises(ApprovalError, match="approval request not found"):
+        ApprovalStore(config.artifacts.path).get_for_proposal(
+            proposed_data["proposal_id"],
+            profile="dev-bot",
+        )
+
+    delivered = await mcp.call_tool("deliver_development_job", {"job_id": job_id})
+    delivered_data = delivered.structured_content
+    assert delivered_data["ok"]
+    assert delivered_data["delivery_status"] == "reported"
+    assert delivered_data["proposal_status"] == "proposed"
+    assert delivered_data["requires_approval"] is False
+    assert delivered_data["applied"] is False
+    assert (repository / "app.py").read_text() == "original\n"
+    assert worktree.exists()
 
 
 @pytest.mark.asyncio

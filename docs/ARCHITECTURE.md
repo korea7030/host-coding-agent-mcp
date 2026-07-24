@@ -38,6 +38,7 @@ flowchart LR
     C -->|direct: 즉시 반영| X
     C -->|worktree 변경| T --> Q
     Q -->|manual| V
+    Q -->|report| RP[적용 없는 proposal report]
     Q -->|commit / auto / pr| L
     V -->|승인 후 patch 적용| X
 ```
@@ -67,6 +68,7 @@ flowchart TD
     WT --> WP[immutable proposal 생성]
     WP --> WD{delivery_mode}
     WD -->|manual| WV[Telegram 승인 대기]
+    WD -->|report| WR[적용 없는 proposal report]
     WD -->|commit| WLC[로컬 branch commit]
     WD -->|auto| AUTO[권한과 remote에 따라 commit 또는 PR]
     WD -->|pr| PR[허용 remote push + GitHub PR]
@@ -209,4 +211,3 @@ flowchart LR
 - Hermes profiles: Docker Compose 서비스
 - MCP 기본 endpoint: `http://127.0.0.1:8787/mcp`
 - Container에서는 host networking 또는 `host.docker.internal`을 사용한다.
-

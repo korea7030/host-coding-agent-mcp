@@ -11,14 +11,19 @@ testing, refactoring, and deployment preparation in host projects.
 ## Required routing sequence
 
 1. Call `check_host_coding_agents` before any development execution.
-2. Present the available configured agents (`antigravity`, `codex`, and/or
+2. Call `check_execution_health` for the target `cwd` and intended isolation
+   mode. Do not start development if `ok=false`; report the
+   `recommended_next_action` and blocker details instead.
+3. Present the available configured agents (`antigravity`, `codex`, and/or
    `opencode`) and ask the user to explicitly choose one. Do not silently select
    `auto`, infer a preference, or start development before the user chooses.
-3. Confirm the target workspace, requested write/isolation behavior, and delivery
+4. Confirm the target workspace, requested write/isolation behavior, and delivery
    expectation when they are not already explicit.
-4. Invoke the selected agent through the appropriate MCP development tool. Pass
-   the user's explicit agent name, not `auto`.
-5. Report the selected agent, resolved workspace, isolation mode, files/results,
+5. Prefer `start_development_task` for execution. Pass the user's explicit agent
+   name, not `auto`.
+6. Poll `get_async_job_events` and `get_async_job` until the job reaches a
+   terminal state.
+7. Report the selected agent, resolved workspace, isolation mode, files/results,
    and any proposal, approval, or job identifiers returned by the server.
 
 If the selected agent is unavailable or disallowed, report that result and ask the
@@ -42,20 +47,35 @@ Use these names exactly as exposed by the server:
   `get_patch_proposal`, `list_patch_proposals`
 - Agent-specific entry points: `run_antigravity`, `run_codex`, `run_opencode`
 
+Standard execution flow:
+
+```text
+check_host_coding_agents
+→ check_execution_health
+→ start_development_task
+→ get_async_job_events
+→ get_async_job
+```
+
 Prefer `start_development_task` for ordinary development after explicit agent
 selection and a successful execution health result. `check_host_coding_agents`
-returns CLI availability plus a compact `execution_health` summary by default;
-call `check_execution_health` when the compact summary shows runtime, cwd mapping,
-sandbox, or worktree blockers. Direct mode modifies the resolved workspace
-immediately and returns `changed_files`. If the user asks to inspect or verify
-without changes but direct mode is still used, pass
-`direct_write_policy: fail_if_changed`; report any
-`direct_write_policy_violation` as a failed safety check, not as successful
-development. `start_development_task` returns a job identifier immediately. Poll `get_async_job` until
-`status` is `succeeded` or `failed`, and call `get_async_job_events` with the
-latest `next_after` cursor to explain the current stage without repeating old
-events. Read the final development response from the job's `result`. Use
-`list_async_jobs` to recover recent identifiers after a client interruption.
+returns CLI availability plus a compact `execution_health` summary by default,
+but a detailed `check_execution_health` call is still the standard preflight for
+execution. Direct mode modifies the resolved workspace immediately and returns
+`changed_files`. If the user asks to inspect or verify without changes but
+direct mode is still used, pass `direct_write_policy: fail_if_changed`; report
+any `direct_write_policy_violation` as a failed safety check, not as successful
+development. `start_development_task` returns a job identifier immediately. Poll
+`get_async_job` until `status` is `succeeded` or `failed`, and call
+`get_async_job_events` with the latest `next_after` cursor to explain the current
+stage without repeating old events. Read the final development response from the
+job's `result`. Use `list_async_jobs` to recover recent identifiers after a
+client interruption.
+
+If MCP tool calls fail with `ClosedResourceError` or another HTTP stream/client
+error, check `GET /healthz` or `GET /readyz` outside the MCP stream. If
+`ok=true`, report a stream reconnect/client-state issue instead of claiming that
+the host-coding-agent server is down.
 
 Use synchronous `run_development_task` only for compatibility or bounded work.
 Use the staged development-job tools when the user needs manual control over
@@ -81,6 +101,8 @@ file changes are requested.
 - `worktree` isolates changes. Manual delivery requires external human approval.
   Return `proposal_id` and `proposal_sha256` exactly, and do not claim application
   until the external approval/apply path reports an applied/delivered state.
+  Report delivery creates an immutable proposal for review only; it does not
+  create approval, commit, PR, or modify the original workspace.
 - An LLM-visible tool call is not human approval. Do not invoke or simulate the
   external Telegram approval identity or patch applier.
 - General MCP `apply_patch` is disabled by policy. Do not seek a fallback write

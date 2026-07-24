@@ -130,25 +130,36 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         proposal_status: str,
         approval_status: str | None = None,
         apply_command: str | None = None,
+        requires_approval: bool | None = None,
+        applied: bool | None = None,
+        message: str | None = None,
     ) -> dict[str, object]:
-        applied = proposal_status == "applied" or approval_status == "applied"
-        requires_approval = proposal_status == "proposed" or approval_status == "pending"
-        if applied:
-            message = "Proposal applied to the original workspace."
-        elif proposal_status == "rejected" or approval_status == "rejected":
-            message = "Proposal rejected and not applied."
-        elif requires_approval:
-            if apply_command:
-                message = (
-                    "Proposal created but not applied. "
-                    f"Use {apply_command} to apply."
-                )
+        if applied is None:
+            applied = proposal_status == "applied" or approval_status == "applied"
+        if requires_approval is None:
+            requires_approval = (
+                proposal_status == "proposed" or approval_status == "pending"
+            )
+        if message is None:
+            if applied:
+                message = "Proposal applied to the original workspace."
+            elif proposal_status == "rejected" or approval_status == "rejected":
+                message = "Proposal rejected and not applied."
+            elif requires_approval:
+                if apply_command:
+                    message = (
+                        "Proposal created but not applied. "
+                        f"Use {apply_command} to apply."
+                    )
+                else:
+                    message = (
+                        "Proposal created but not applied. "
+                        "Approval is required to apply."
+                    )
+            elif proposal_status == "delivered":
+                message = "Proposal delivered by the configured delivery mode."
             else:
-                message = "Proposal created but not applied. Approval is required to apply."
-        elif proposal_status == "delivered":
-            message = "Proposal delivered by the configured delivery mode."
-        else:
-            message = f"Proposal status: {proposal_status}."
+                message = f"Proposal status: {proposal_status}."
         payload: dict[str, object] = {
             "proposal_status": proposal_status,
             "requires_approval": requires_approval,
@@ -171,6 +182,32 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
             proposal_status=proposal_status,
             approval_status=status,
         )
+
+    async def server_health_payload(*, readiness: bool) -> dict[str, object]:
+        try:
+            tools = await mcp.list_tools(run_middleware=False)
+            tool_count: int | None = len(tools)
+        except Exception:
+            tool_count = None
+        payload: dict[str, object] = {
+            "ok": tool_count is None or tool_count > 0,
+            "server": "host-coding-agent",
+            "status": "ready" if readiness else "alive",
+            "tools": tool_count,
+            "configured_profiles": sorted(config.profiles),
+            "runtime_profiles": runtime_registry.registered_profiles(),
+            "mcp_endpoint": "/mcp",
+            "stream_note": (
+                "If Hermes reports ClosedResourceError but this endpoint is ok, "
+                "treat it as an MCP HTTP stream client/reconnect issue, not a "
+                "server-down signal."
+            ),
+        }
+        if readiness:
+            payload["auth_enabled"] = config.auth.enabled
+            payload["artifacts_path"] = str(artifact_path)
+            payload["worktree_state_path"] = str(worktree_state_path)
+        return payload
 
     def path_mapping_payload(
         *,
@@ -369,8 +406,6 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
             raise SecurityViolation(
                 "delivery mode is not allowed for this profile"
             )
-        if delivery_mode == DeliveryMode.report:
-            raise SecurityViolation("report delivery mode is not implemented")
         validate_task(task)
         requested_cwd = cwd or (
             str(profile.default_cwd)
@@ -487,6 +522,26 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
             )
         )
         return payload
+
+    @mcp.custom_route(
+        "/healthz",
+        methods=["GET"],
+        include_in_schema=False,
+    )
+    async def healthz(_: Request) -> JSONResponse:
+        return JSONResponse(await server_health_payload(readiness=False))
+
+    @mcp.custom_route(
+        "/readyz",
+        methods=["GET"],
+        include_in_schema=False,
+    )
+    async def readyz(_: Request) -> JSONResponse:
+        payload = await server_health_payload(readiness=True)
+        return JSONResponse(
+            payload,
+            status_code=200 if payload["ok"] else 503,
+        )
 
     @mcp.custom_route(
         "/runtime/register",
@@ -925,6 +980,31 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
                     "isolation_mode": IsolationMode.worktree.value,
                     **worktree_path_payload,
                 }
+            if delivery_mode == DeliveryMode.report:
+                return {
+                    "ok": True,
+                    "stage": "reported",
+                    "job_id": job.job_id,
+                    "status": WorktreeStatus.proposed.value,
+                    "delivery_status": "reported",
+                    "selected_agent": run_result.selected_agent.value,
+                    "proposal_id": proposal_result.proposal_id,
+                    "proposal_sha256": proposal_result.proposal_sha256,
+                    "apply_command": None,
+                    "changed_files": proposal_result.changed_files,
+                    **proposal_status_payload(
+                        proposal_status="proposed",
+                        requires_approval=False,
+                        applied=False,
+                        message=(
+                            "Report proposal created but not applied. "
+                            "This delivery mode does not create approval, commit, PR, "
+                            "or modify the original workspace."
+                        ),
+                    ),
+                    "isolation_mode": IsolationMode.worktree.value,
+                    **worktree_path_payload,
+                }
             stage = "delivery"
             emit_progress(
                 "delivery",
@@ -1215,18 +1295,47 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
             )
             payload = result.model_dump(mode="json")
             if result.ok and result.proposal_id and result.proposal_sha256:
-                apply_command = proposal_apply_command(
-                    result.proposal_id,
-                    result.proposal_sha256,
+                job = worktree_manager.get(job_id, profile=profile_name)
+                apply_command = (
+                    proposal_apply_command(
+                        result.proposal_id,
+                        result.proposal_sha256,
+                    )
+                    if job.delivery_mode == DeliveryMode.manual
+                    else None
                 )
+                if job.delivery_mode == DeliveryMode.manual:
+                    status_payload = proposal_status_payload(
+                        proposal_status="proposed",
+                        approval_status="pending",
+                        apply_command=apply_command,
+                    )
+                elif job.delivery_mode == DeliveryMode.report:
+                    status_payload = proposal_status_payload(
+                        proposal_status="proposed",
+                        requires_approval=False,
+                        applied=False,
+                        message=(
+                            "Report proposal created but not applied. "
+                            "This delivery mode does not create approval, commit, PR, "
+                            "or modify the original workspace."
+                        ),
+                    )
+                else:
+                    status_payload = proposal_status_payload(
+                        proposal_status="proposed",
+                        requires_approval=False,
+                        applied=False,
+                        message=(
+                            "Proposal created but not delivered yet. "
+                            "Call deliver_development_job to run the configured "
+                            "commit, auto, or PR delivery mode."
+                        ),
+                    )
                 payload.update(
                     {
                         "apply_command": apply_command,
-                        **proposal_status_payload(
-                            proposal_status="proposed",
-                            approval_status="pending",
-                            apply_command=apply_command,
-                        ),
+                        **status_payload,
                     }
                 )
             return payload
@@ -1249,6 +1358,28 @@ def create_server(config_path: str | Path) -> tuple[FastMCP, object]:
         try:
             profile_name, _ = development_profile(assistant_id)
             job = worktree_manager.get(job_id, profile=profile_name)
+            if job.delivery_mode == DeliveryMode.report:
+                link = worktree_manager.get_proposal_link(
+                    job_id,
+                    profile=profile_name,
+                )
+                return {
+                    "ok": True,
+                    "job_id": job_id,
+                    "delivery_status": "reported",
+                    "proposal_id": link["proposal_id"],
+                    "proposal_sha256": link["proposal_sha256"],
+                    "apply_command": None,
+                    **proposal_status_payload(
+                        proposal_status="proposed",
+                        requires_approval=False,
+                        applied=False,
+                        message=(
+                            "Report proposal already exists and has not been applied. "
+                            "Report delivery does not create approval, commit, or PR."
+                        ),
+                    ),
+                }
             if job.delivery_mode == DeliveryMode.manual:
                 if job.status.value == "delivered":
                     return {

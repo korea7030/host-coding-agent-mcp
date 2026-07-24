@@ -64,8 +64,10 @@ def test_routing_context_is_fail_closed():
     context = result["context"]
     assert "MUST use" in context
     assert "Do not fall back" in context
-    assert "mcp_host_coding_agent_run_development_task" in context
-    assert 'isolation_mode="direct"' in context
+    assert "check_execution_health" in context
+    assert "start_development_task" in context
+    assert "explicit choice" in context
+    assert "direct_write_policy=fail_if_changed" in context
     assert "does not require Git" in context
     assert "proposal_sha256" in context
     assert 'error_code="non_development_task"' in context

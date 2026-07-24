@@ -43,11 +43,18 @@ profile 불허를 구분한다.
 
 ```text
 check_host_coding_agents
+→ check_execution_health(cwd, isolation_mode)
 → selectable_agents를 사용자에게 제시
 → 사용자 선택
-→ run_development_task(agent=<선택값>)
+→ start_development_task(agent=<선택값>)
+→ get_async_job_events(job_id, after)
 → 응답의 requested_agent, selection_mode, candidate_agents, selected_agent 확인
 ```
+
+`check_execution_health.ok=false`이면 실행하지 않는다. `recommended_next_action`을
+사용자에게 전달하고 runtime registration, cwd mapping, sandbox, worktree blocker를 먼저
+해결한다. HTTP MCP stream 오류가 의심되면 MCP tool 호출과 별도로 `GET /healthz` 또는
+`GET /readyz`를 확인한다.
 
 명시 선택이면 `selection_mode=explicit`이고 candidate는 하나다. `auto`를 사용하는 기존
 호출은 `selection_mode=automatic`이며 fallback 후보 전체가 응답에 포함된다.

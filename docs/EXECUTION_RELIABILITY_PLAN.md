@@ -392,7 +392,7 @@ manual worktree mode 응답에 문구와 상태를 강제한다.
 
 ## 6. P2 구현 계획
 
-### P2-1. HTTP stream reconnect 진단
+### P2-1. HTTP stream reconnect 진단 — implemented
 
 MCP server health와 Hermes HTTP stream client 상태를 분리한다.
 
@@ -415,7 +415,15 @@ MCP server health와 Hermes HTTP stream client 상태를 분리한다.
 
 Hermes에서 `ClosedResourceError`가 나도 `/healthz`가 true이면 server down으로 판단하지 않는다.
 
-### P2-2. Documentation/skill 업데이트
+구현:
+
+- `GET /healthz`: 서버 생존, tool count, configured profile, registered runtime profile 반환
+- `GET /readyz`: `/healthz` 정보에 auth/artifact/worktree state path를 추가해 readiness 반환
+- 두 endpoint는 MCP SSE stream 없이 일반 HTTP로 호출 가능하다.
+- Hermes에서 MCP 호출이 `ClosedResourceError`로 실패해도 `/healthz.ok=true`이면
+  서버 다운이 아니라 HTTP stream client/reconnect 문제로 분리해서 진단한다.
+
+### P2-2. Documentation/skill 업데이트 — implemented
 
 업데이트 대상:
 
@@ -433,6 +441,33 @@ check_host_coding_agents
 → run_development_task 또는 start_development_task
 → get_async_job_events
 ```
+
+구현:
+
+- `README.md`: discovery → health → explicit agent selection → async job/events 표준 흐름 반영
+- `docs/AGENT_ROUTING.md`: agent routing 전에 `check_execution_health`를 필수 preflight로 명시
+- `docs/DEVELOPMENT_ENFORCEMENT.md`: Hermes enforcement 허용 경로와 fail-closed 규칙 업데이트
+- `skills/host-coding-agent/SKILL.md`: skill의 required routing sequence를 async 표준 흐름으로 업데이트
+- `hermes_plugins/development-policy/SOUL_APPEND.md`: Hermes profile policy 문구를 명시 agent 선택과 health preflight 기준으로 업데이트
+
+### P2-3. Worktree report delivery 구현 — implemented
+
+`DeliveryMode.report`는 enum과 API surface에는 있었지만 서버 생성 단계에서
+`report delivery mode is not implemented`로 차단되고 있었다.
+
+구현:
+
+- `create_managed_job`에서 `DeliveryMode.report` 차단 제거
+- `run_development_task(isolation_mode=worktree, delivery_mode=report)`는
+  agent 실행, trusted test, immutable proposal 생성까지만 수행한다.
+- report 응답은 `delivery_status=reported`, `proposal_status=proposed`,
+  `requires_approval=false`, `applied=false`를 반환한다.
+- report mode는 approval, apply, commit, PR을 만들지 않고 원본 workspace를 수정하지
+  않는다.
+- 단계형 `propose_development_job` / `deliver_development_job`도 report 상태를 명확히
+  반환한다.
+- worktree는 검토를 위해 보존되며, 사용자가 `abandon_development_job`로 정리하거나
+  expiry cleanup 대상이 된다.
 
 ## 7. 권장 구현 순서
 

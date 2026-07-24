@@ -36,16 +36,19 @@ ROUTING_CONTEXT = """Development execution policy:
 - NEVER send OAuth, login, token refresh, account connection, Hermes skill installation, MCP registration/configuration, or Playwright/Chromium runtime installation to host-coding-agent.
 - Route authentication to the target MCP or skill. Route skill and MCP lifecycle operations to Hermes profile management. Install runtime dependencies in the environment where that MCP actually executes.
 - A host-coding-agent response with error_code="non_development_task" is final and non-retryable. Do not rephrase or split the same request into another coding-agent call.
-- Default development requests to mcp_host_coding_agent_run_development_task with agent="auto", isolation_mode="direct", and timeout_sec=900.
-- Direct mode does not require Git and modifies the authenticated workspace immediately. Do not inspect for .git or require a repository before calling it.
-- Use isolation_mode="worktree" only when the user explicitly requests isolation, approval, commit, or PR delivery.
+- Standard development flow is check_host_coding_agents -> check_execution_health -> start_development_task(agent=<explicit selected agent>) -> get_async_job_events -> get_async_job.
+- For interactive requests, present selectable_agents and pass the user's explicit choice such as opencode, codex, or antigravity. Do not silently default to auto; auto is only for existing automation compatibility.
+- If check_execution_health returns ok=false, report recommended_next_action and do not start development.
+- Direct mode does not require Git and modifies the authenticated workspace immediately. Do not inspect for .git or require a repository before calling it. Use direct_write_policy=fail_if_changed for read-only intent.
+- Use isolation_mode="worktree" only when the user explicitly requests isolation, report-only review, approval, commit, or PR delivery.
 - Pass the current container workspace path as cwd (normally /opt/data/profiles/<profile>/workspace or a child). The MCP maps that authenticated profile path to its host workspace. Do not pass /opt/data itself.
 - The result cwd is the resolved macOS host path by design. Use requested_cwd and path_mapping_applied to verify the translation; do not treat a /Users/... result cwd as a mapping failure.
 - Keep each request narrowly scoped. Split large project analysis into multiple calls to avoid oversized tool results.
 - Never use terminal, execute_code, write_file, patch, delegate_task, or a directly launched coding-agent CLI for development.
-- If host-coding-agent MCP fails, report the failure. Do not fall back to a native development tool.
+- If host-coding-agent MCP fails, report the failure. Do not fall back to a native development tool. If the failure is ClosedResourceError or another HTTP stream/client error, check /healthz or /readyz; if ok=true, report a stream reconnect/client-state issue.
 - Direct mode coding agents may modify the mapped workspace. When worktree manual mode returns a proposal_id, show the proposal_id and proposal_sha256 to the user.
-- Only the external Telegram /apply_proposal command may apply a proposal. Do not claim that a patch was applied unless that command returns status=applied."""
+- Worktree report delivery creates an immutable proposal for review but does not create approval, commit, PR, or modify the original workspace.
+- Only the external Telegram /apply_proposal command may apply a manual proposal. Do not claim that a patch was applied unless that command returns status=applied."""
 
 _telegram_command_context: contextvars.ContextVar[tuple[str, str] | None] = (
     contextvars.ContextVar("development_policy_telegram_command", default=None)

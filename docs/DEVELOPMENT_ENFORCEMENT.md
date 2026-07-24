@@ -17,19 +17,40 @@ authenticated `host-coding-agent` MCP server.
    modes, and process sandboxes.
 5. If MCP execution fails, Hermes must report the failure and must not fall
    back to native development tools.
+6. If `check_execution_health.ok=false`, Hermes must not start development
+   execution until the reported runtime/cwd/sandbox/worktree blocker is fixed.
+7. If MCP tool calls fail with stream/client errors, Hermes may check
+   `GET /healthz` or `GET /readyz`; if health is ok, treat the issue as HTTP
+   stream reconnect state, not server-down.
 
 ## Allowed development path
 
+- `mcp_host_coding_agent_check_host_coding_agents`
+- `mcp_host_coding_agent_check_execution_health`
+- `mcp_host_coding_agent_start_development_task`
+- `mcp_host_coding_agent_get_async_job`
+- `mcp_host_coding_agent_get_async_job_events`
 - `mcp_host_coding_agent_run_development_task`
 - `mcp_host_coding_agent_run_coding_agent`
 - `mcp_host_coding_agent_run_antigravity`
 - `mcp_host_coding_agent_run_codex`
 - `mcp_host_coding_agent_run_opencode`
 
-The normal default is `run_development_task(agent="auto",
-isolation_mode="direct", timeout_sec=900)`. Direct mode does not require Git
-and modifies the mapped workspace immediately. Worktree mode is selected only
-for explicit isolation, approval, commit, or PR requests.
+The normal sequence is:
+
+```text
+check_host_coding_agents
+→ check_execution_health
+→ start_development_task(agent=<explicit selected agent>, ...)
+→ get_async_job_events
+```
+
+Use a concrete selected agent such as `opencode`, `codex`, or `antigravity` for
+interactive development. `agent="auto"` remains only for existing automation
+compatibility. Direct mode does not require Git and modifies the mapped
+workspace immediately; use `direct_write_policy=fail_if_changed` for read-only
+intent. Worktree mode is selected only for explicit isolation, approval, commit,
+PR, or report-only review requests.
 Hermes passes its container workspace path as `cwd`; the MCP translates only
 the profile-scoped workspace root. The gateway registers its container ID
 outside the LLM tool loop, and the MCP derives the host path from Docker
@@ -72,3 +93,7 @@ endpoint:
 - reverses the patch if post-apply audit completion fails.
 
 An LLM-visible MCP tool call is not proof of human approval.
+
+In worktree report mode, the MCP creates an immutable proposal for review but
+does not create approval, commit, PR, or modify the original workspace. The
+worktree remains available until explicitly abandoned or cleaned up by expiry.
